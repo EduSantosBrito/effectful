@@ -183,7 +183,7 @@ where
   })
 }
 
-/// Sequence of strings split by [`ConfigProvider::seq_delim`].
+/// Sequence of strings split by [`ConfigProvider::seq_delim`](crate::provider::ConfigProvider::seq_delim).
 pub fn read_string_list<A, E, R>(path: &[&str]) -> Effect<A, E, R>
 where
   A: From<Vec<String>> + 'static,
@@ -271,9 +271,7 @@ mod tests {
   use ::effect::run_blocking;
 
   fn env_map(pairs: &[(&str, &str)]) -> ConfigEnv {
-    config_env(MapConfigProvider::from_pairs(
-      pairs.iter().copied().map(|(k, v)| (k, v)),
-    ))
+    config_env(MapConfigProvider::from_pairs(pairs.iter().copied()))
   }
 
   #[test]
