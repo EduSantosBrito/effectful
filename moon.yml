@@ -49,22 +49,6 @@ tasks:
     options:
       cache: true
       outputStyle: buffer-only-failure
-  lint:
-    description: 'Dylint (Fenix nightly via devenv; no rustup): custom lints on full workspace'
-    deps: ['^:lint', '~:clippy']
-    command: bash
-    args: ['scripts/moon-dylint.sh', 'workspace']
-    inputs:
-      - 'Cargo.toml'
-      - 'scripts/moon-dylint.sh'
-      - 'scripts/dylint-rustup-shim/rustup'
-      - 'crates/effect-rs-dylint-rules/Cargo.toml'
-      - 'crates/effect-rs-dylint-rules/rust-toolchain'
-      - 'crates/effect-rs-dylint-rules/src/**/*.rs'
-      - 'crates/**/*.rs'
-    options:
-      cache: true
-      outputStyle: buffer-only-failure
   audit:
     description: 'Run cargo audit for known Rust security advisories'
     command: 'cargo'

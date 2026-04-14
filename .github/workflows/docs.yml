@@ -9,6 +9,9 @@ on:
 concurrency:
   group: pages-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  CARGO_TERM_COLOR: always
+  MDBOOK_VERSION: "0.4.43"
 jobs:
   build:
     name: Build book + API docs
@@ -24,8 +27,6 @@ jobs:
           curl -fsSL https://moonrepo.dev/install/moon.sh | bash
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
       - name: Install mdBook
-        env:
-          MDBOOK_VERSION: "0.4.43"
         run: |
           mkdir -p "$HOME/.local/bin"
           curl -sSL \
@@ -40,6 +41,7 @@ jobs:
         run: moon run :docs
         env:
           MOON_TOOLCHAIN_FORCE_GLOBALS: rust
+          RUSTDOCFLAGS: -D warnings
       - name: Build mdBook
         run: moon run :book
         env:

@@ -39,26 +39,8 @@ tasks:
     options:
       cache: true
       outputStyle: buffer-only-failure
-  lint:
-    description: 'Dylint: all libraries from workspace.metadata.dylint'
-    deps: ['^:lint', '~:clippy']
-    command: bash
-    args: ['../../scripts/moon-dylint.sh', 'package', 'effect-rs-macro']
-    inputs:
-      - 'Cargo.toml'
-      - 'src/**/*.rs'
-      - 'tests/**/*.rs'
-      - '/Cargo.toml'
-      - '/crates/effect-rs-dylint-rules/Cargo.toml'
-      - '/crates/effect-rs-dylint-rules/rust-toolchain'
-      - '/crates/effect-rs-dylint-rules/src/**/*.rs'
-      - '/scripts/moon-dylint.sh'
-      - '/scripts/dylint-rustup-shim/rustup'
-    options:
-      cache: true
-      outputStyle: buffer-only-failure
   test:
-    deps: ['^:test', '~:lint']
+    deps: ['^:test']
     command:
       - cargo
       - nextest

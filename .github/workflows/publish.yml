@@ -1,0 +1,245 @@
+name: Publish to crates.io
+# Trigger: push a semver tag, e.g.  git tag v0.2.0 && git push --tags
+# The tag must match the version in every workspace Cargo.toml.
+# Crates are published in strict dependency order so that crates.io index
+# updates before downstream crates try to resolve them.
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (pass --dry-run to cargo publish)"
+        required: false
+        default: "false"
+        type: boolean
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Sanity: verify all workspace crate versions match the pushed tag.
+  # ──────────────────────────────────────────────────────────────────────────
+  verify-versions:
+    name: Verify Versions
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract version from tag or input
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF#refs/tags/v}"
+          else
+            # workflow_dispatch: infer from proc-macro Cargo.toml
+            TAG=$(grep -m1 '^version' crates/effect-rs-proc-macro/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          fi
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: $TAG"
+      - name: Check all crate versions match
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          CRATES=(
+            crates/effect-rs-proc-macro/Cargo.toml
+            crates/effect-rs-macro/Cargo.toml
+            crates/effect-rs/Cargo.toml
+            crates/effect-rs-tokio/Cargo.toml
+            crates/effect-rs-logger/Cargo.toml
+            crates/effect-rs-config/Cargo.toml
+            crates/effect-rs-axum/Cargo.toml
+            crates/effect-rs-reqwest/Cargo.toml
+            crates/effect-rs-tower/Cargo.toml
+          )
+          MISMATCH=0
+          for toml in "${CRATES[@]}"; do
+            CRATE_VER=$(grep -m1 '^version' "$toml" | sed 's/version = "\(.*\)"/\1/')
+            if [ "$CRATE_VER" != "$VERSION" ]; then
+              echo "MISMATCH: $toml has version $CRATE_VER, expected $VERSION"
+              MISMATCH=1
+            fi
+          done
+          if [ "$MISMATCH" -eq 1 ]; then
+            echo "Version mismatch detected — aborting publish."
+            exit 1
+          fi
+          echo "All crates are at version $VERSION"
+  # ──────────────────────────────────────────────────────────────────────────
+  # Run the full test suite before publishing anything.
+  # ──────────────────────────────────────────────────────────────────────────
+  test:
+    name: Pre-publish tests
+    runs-on: ubuntu-latest
+    needs: [verify-versions]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: cargo nextest run
+        env:
+          NEXTEST_NO_TESTS: pass
+        run: cargo nextest run --workspace
+  # ──────────────────────────────────────────────────────────────────────────
+  # Publish level-0 (no internal deps): proc-macro + macro crates.
+  # ──────────────────────────────────────────────────────────────────────────
+  publish-level-0:
+    name: Publish level-0 (proc-macro, macro)
+    runs-on: ubuntu-latest
+    needs: [test]
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+      - name: Publish effect-rs-proc-macro
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          args=(--package effect-rs-proc-macro --no-verify)
+          [ "${{ inputs.dry_run }}" = "true" ] && args+=(--dry-run)
+          cargo publish "${args[@]}"
+      - name: Wait for crates.io index
+        run: sleep 20
+      - name: Publish effect-rs-macro
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          args=(--package effect-rs-macro --no-verify)
+          [ "${{ inputs.dry_run }}" = "true" ] && args+=(--dry-run)
+          cargo publish "${args[@]}"
+  # ──────────────────────────────────────────────────────────────────────────
+  # Publish level-1: effect-rs (depends on proc-macro + macro)
+  # ──────────────────────────────────────────────────────────────────────────
+  publish-level-1:
+    name: Publish level-1 (effect-rs)
+    runs-on: ubuntu-latest
+    needs: [publish-level-0]
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+      - name: Wait for crates.io index
+        run: sleep 30
+      - name: Publish effect-rs
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          args=(--package effect-rs --no-verify)
+          [ "${{ inputs.dry_run }}" = "true" ] && args+=(--dry-run)
+          cargo publish "${args[@]}"
+  # ──────────────────────────────────────────────────────────────────────────
+  # Publish level-2: tokio + logger (depend only on effect-rs)
+  # ──────────────────────────────────────────────────────────────────────────
+  publish-level-2:
+    name: Publish level-2 (tokio, logger)
+    runs-on: ubuntu-latest
+    needs: [publish-level-1]
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+      - name: Wait for crates.io index
+        run: sleep 30
+      - name: Publish effect-rs-tokio
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          args=(--package effect-rs-tokio --no-verify)
+          [ "${{ inputs.dry_run }}" = "true" ] && args+=(--dry-run)
+          cargo publish "${args[@]}"
+      - name: Wait for crates.io index
+        run: sleep 20
+      - name: Publish effect-rs-logger
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          args=(--package effect-rs-logger --no-verify)
+          [ "${{ inputs.dry_run }}" = "true" ] && args+=(--dry-run)
+          cargo publish "${args[@]}"
+  # ──────────────────────────────────────────────────────────────────────────
+  # Publish level-3: integrations (axum, config, reqwest, tower)
+  # axum + tower depend on effect-rs-tokio; config depends on effect-rs-logger.
+  # ──────────────────────────────────────────────────────────────────────────
+  publish-level-3:
+    name: Publish level-3 (axum, config, reqwest, tower)
+    runs-on: ubuntu-latest
+    needs: [publish-level-2]
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+      - name: Wait for crates.io index
+        run: sleep 30
+      - name: Publish effect-rs-config
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          args=(--package effect-rs-config --no-verify)
+          [ "${{ inputs.dry_run }}" = "true" ] && args+=(--dry-run)
+          cargo publish "${args[@]}"
+      - name: Wait for crates.io index
+        run: sleep 20
+      - name: Publish effect-rs-axum
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          args=(--package effect-rs-axum --no-verify)
+          [ "${{ inputs.dry_run }}" = "true" ] && args+=(--dry-run)
+          cargo publish "${args[@]}"
+      - name: Wait for crates.io index
+        run: sleep 20
+      - name: Publish effect-rs-reqwest
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          args=(--package effect-rs-reqwest --no-verify)
+          [ "${{ inputs.dry_run }}" = "true" ] && args+=(--dry-run)
+          cargo publish "${args[@]}"
+      - name: Wait for crates.io index
+        run: sleep 20
+      - name: Publish effect-rs-tower
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          args=(--package effect-rs-tower --no-verify)
+          [ "${{ inputs.dry_run }}" = "true" ] && args+=(--dry-run)
+          cargo publish "${args[@]}"
+  # ──────────────────────────────────────────────────────────────────────────
+  # Create a GitHub Release with auto-generated notes.
+  # ──────────────────────────────────────────────────────────────────────────
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: [publish-level-3]
+    if: github.event_name == 'push' && inputs.dry_run != 'true'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          make_latest: true

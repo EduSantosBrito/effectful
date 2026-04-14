@@ -1,9 +1,4 @@
 inputs:
-  fenix:
-    url: github:nix-community/fenix
-    inputs:
-      nixpkgs:
-        follows: nixpkgs
   git-hooks:
     url: github:cachix/git-hooks.nix
     inputs:

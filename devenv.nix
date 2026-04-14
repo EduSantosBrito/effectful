@@ -48,22 +48,6 @@
     ];
     doCheck = false;
   };
-
-  # Fenix nightly matching crates/effect-rs-dylint-rules/rust-toolchain (Dylint / rustc_private).
-  fenixPkgs = inputs.fenix.packages.${pkgs.system};
-  effectDylintToolchain =
-    (fenixPkgs.toolchainOf {
-      channel = "nightly";
-      date = "2025-09-18";
-      sha256 = "13ywswfy0179hymdvbf5w061y2mxc8xd0zik0k31p2z21sc8vv16";
-    }).withComponents [
-      "cargo"
-      "rustc"
-      "rust-src"
-      "rustc-dev"
-      "llvm-tools-preview"
-      "clippy"
-    ];
 in {
   name = "effect-rs";
 
@@ -105,14 +89,9 @@ in {
 
   env = {
     CARGO_TERM_COLOR = "always";
-    EFFECT_DYLINT_TOOLCHAIN = "${effectDylintToolchain}";
-    EFFECT_DYLINT_MOON_PATH_PREFIX = "${toString ./.}/scripts/dylint-rustup-shim:${effectDylintToolchain}/bin";
-    DYLINT_RUSTUP_ACTIVE_TOOLCHAIN = "nightly-2025-09-18-${pkgs.stdenv.hostPlatform.config}";
-    DYLINT_STABLE_CARGO = "${pkgs.cargo}/bin/cargo";
     MOON_TOOLCHAIN_FORCE_GLOBALS = "rust";
     NEXTEST_NO_TESTS = "pass";
     OPENSSL_NO_VENDOR = "1";
-    RUST_LOG = "trace,dylint_driver=info";
   };
 
   languages.rust = {
@@ -160,53 +139,7 @@ in {
     prek-install
     moon-sync
 
-    export EFFECT_DYLINT_MOON_PATH="''${EFFECT_DYLINT_MOON_PATH_PREFIX}:''${PATH}"
-
-    _dylint_cli="$DEVENV_ROOT/.devenv/state/dylint-cli"
-    _dylint_mark="$_dylint_cli/.installed-v5.0.0-git"
-    if [[ ! -f "$_dylint_mark" ]]; then
-      echo "devenv: installing cargo-dylint + dylint-link into .devenv/state/dylint-cli (one-time)..." >&2
-      rm -rf "$_dylint_cli"
-      mkdir -p "$_dylint_cli"
-      cargo install --git https://github.com/trailofbits/dylint --tag v5.0.0 --locked --root "$_dylint_cli" cargo-dylint dylint-link
-      : >"$_dylint_mark"
-    fi
-    export PATH="$_dylint_cli/bin:$PATH"
-
     mkdir -p "$HOME/.cache/sccache"
     chmod 755 "$HOME/.cache/sccache" 2>/dev/null || true
   '';
-
-  git-hooks = {
-    default_stages = [
-      "pre-push"
-      "commit-msg"
-    ];
-
-    hooks = {
-      pre-commit = {
-        enable = true;
-        name = "pre-commit";
-        entry = "mkdir -p tmp && env TMPDIR=$(pwd)/tmp moon run :format :check :test";
-        stages = ["pre-commit"];
-        pass_filenames = false;
-        always_run = true;
-        language = "system";
-      };
-
-      pre-push = {
-        enable = true;
-        name = "pre-push";
-        entry = "mkdir -p tmp && env MOON_CONCURRENCY=1 TMPDIR=$(pwd)/tmp moon run :format :check :build :test :coverage :audit :check-docs";
-        stages = ["pre-push"];
-        pass_filenames = false;
-        always_run = true;
-        language = "system";
-      };
-
-      commitizen = {
-        enable = true;
-      };
-    };
-  };
 }

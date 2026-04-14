@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["crates/effect-rs-dylint-rules", ".tmp"]
+exclude = [".tmp", "tmp"]
 members = [
   "crates/effect-rs",
   "crates/effect-rs-axum",
@@ -12,10 +12,6 @@ members = [
   "crates/effect-rs-tokio",
   "crates/effect-rs-tower",
 ]
-
-# `scripts/moon-dylint.sh` uses `cargo dylint` with `DYLINT_LIBRARY_PATH` (Fenix nightly + rustc-dev via `devenv.nix`).
-[workspace.metadata.dylint]
-libraries = [{ path = "crates/effect-rs-dylint-rules" }]
 
 # More stable / comparable Criterion numbers than default bench profile (inherits release).
 [profile.bench]

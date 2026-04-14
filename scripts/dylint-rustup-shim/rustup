@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-# Minimal rustup stub for Dylint nightly builds: answers `rustup show active-toolchain`
-# so tooling sees the toolchain from DYLINT_RUSTUP_ACTIVE_TOOLCHAIN (see devenv.nix).
-set -euo pipefail
-if [[ "${1:-}" == "show" && "${2:-}" == "active-toolchain" ]]; then
-  echo "${DYLINT_RUSTUP_ACTIVE_TOOLCHAIN:-unknown} (devenv dylint shim)"
-  exit 0
-fi
-exec rustup "$@"

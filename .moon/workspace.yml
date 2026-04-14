@@ -5,7 +5,6 @@ projects:
   effect-rs-lib: crates/effect-rs
   effect-rs-axum: crates/effect-rs-axum
   effect-rs-config: crates/effect-rs-config
-  effect-rs-dylint-rules: crates/effect-rs-dylint-rules
   effect-rs-logger: crates/effect-rs-logger
   effect-rs-macro: crates/effect-rs-macro
   effect-rs-proc-macro: crates/effect-rs-proc-macro
