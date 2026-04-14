@@ -1,0 +1,217 @@
+//! Ordered multimap — each key holds a FIFO list of values, backed by [`im::OrdMap`] (B-tree).
+//!
+//! Effect.ts “red-black” style duplicate-key semantics without exposing a separate RBT implementation.
+
+use im::OrdMap;
+use std::borrow::Borrow;
+use std::cmp::Ordering;
+
+/// Ordered map allowing multiple values per key (stored left-to-right per insertion order).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RedBlackTree<K: Ord + Clone, V: Clone> {
+  inner: OrdMap<K, Vec<V>>,
+}
+
+impl<K: Ord + Clone, V: Clone> RedBlackTree<K, V> {
+  /// Empty multimap.
+  #[inline]
+  pub fn empty() -> Self {
+    Self {
+      inner: OrdMap::new(),
+    }
+  }
+
+  /// Append `value` under `key` (does not replace existing values).
+  pub fn insert(&mut self, key: K, value: V) {
+    if self.inner.contains_key(&key) {
+      self.inner.get_mut(&key).expect("key present").push(value);
+    } else {
+      self.inner.insert(key, vec![value]);
+    }
+  }
+
+  /// Remove the oldest value for `key`. Returns it if any; drops the key when the list empties.
+  pub fn remove_first<Q>(&mut self, key: &Q) -> Option<V>
+  where
+    Q: Ord + ?Sized,
+    K: Borrow<Q> + Clone,
+  {
+    let (v, drop_key) = {
+      let vec = self.inner.get_mut(key)?;
+      if vec.is_empty() {
+        return None;
+      }
+      let v = vec.remove(0);
+      (v, vec.is_empty())
+    };
+    if drop_key {
+      self.inner.remove(key);
+    }
+    Some(v)
+  }
+
+  /// Borrowed view of all values for `key` (empty if missing).
+  pub fn find<Q>(&self, key: &Q) -> &[V]
+  where
+    Q: Ord + ?Sized,
+    K: Borrow<Q>,
+  {
+    self.inner.get(key).map(|v| v.as_slice()).unwrap_or(&[])
+  }
+
+  /// `true` if any value is stored under `key`.
+  #[inline]
+  pub fn has<Q>(&self, key: &Q) -> bool
+  where
+    Q: Ord + ?Sized,
+    K: Borrow<Q>,
+  {
+    self.inner.contains_key(key)
+  }
+
+  /// Smallest key’s first value, if any.
+  pub fn first(&self) -> Option<(K, V)> {
+    self
+      .inner
+      .get_min()
+      .and_then(|(k, vs)| vs.first().map(|v| (k.clone(), v.clone())))
+  }
+
+  /// Largest key’s first value, if any.
+  pub fn last(&self) -> Option<(K, V)> {
+    self
+      .inner
+      .get_max()
+      .and_then(|(k, vs)| vs.first().map(|v| (k.clone(), v.clone())))
+  }
+
+  /// All `(key, value)` pairs with `key > bound`, ascending.
+  pub fn greater_than<Q>(&self, bound: &Q) -> Vec<(K, V)>
+  where
+    Q: Ord + ?Sized,
+    K: Borrow<Q> + Ord + Clone,
+  {
+    self
+      .inner
+      .iter()
+      .filter(|(k, _)| Borrow::<Q>::borrow(*k).cmp(bound) == Ordering::Greater)
+      .flat_map(|(k, vs)| {
+        let k = k.clone();
+        vs.iter().cloned().map(move |v| (k.clone(), v))
+      })
+      .collect()
+  }
+
+  /// All `(key, value)` pairs with `key < bound`, ascending.
+  pub fn less_than<Q>(&self, bound: &Q) -> Vec<(K, V)>
+  where
+    Q: Ord + ?Sized,
+    K: Borrow<Q> + Ord + Clone,
+  {
+    self
+      .inner
+      .iter()
+      .filter(|(k, _)| Borrow::<Q>::borrow(*k).cmp(bound) == Ordering::Less)
+      .flat_map(|(k, vs)| {
+        let k = k.clone();
+        vs.iter().cloned().map(move |v| (k.clone(), v))
+      })
+      .collect()
+  }
+
+  /// `n`th pair in ascending key order with values expanded left-to-right per key (0-based).
+  pub fn get_at(&self, n: usize) -> Option<(K, V)> {
+    let mut i = 0usize;
+    for (k, vs) in self.inner.iter() {
+      for v in vs {
+        if i == n {
+          return Some((k.clone(), v.clone()));
+        }
+        i += 1;
+      }
+    }
+    None
+  }
+
+  /// Total number of stored values (sum of list lengths).
+  #[inline]
+  pub fn size(&self) -> usize {
+    self.inner.values().map(Vec::len).sum()
+  }
+
+  /// All `(key, value)` pairs in ascending key order, values per key left-to-right.
+  #[inline]
+  pub fn entries(&self) -> Vec<(K, V)> {
+    self
+      .inner
+      .iter()
+      .flat_map(|(k, vs)| {
+        let k = k.clone();
+        vs.iter().cloned().map(move |v| (k.clone(), v))
+      })
+      .collect()
+  }
+
+  /// Distinct keys in ascending order.
+  #[inline]
+  pub fn keys(&self) -> Vec<K> {
+    self.inner.keys().cloned().collect()
+  }
+
+  /// All values in key order, each key’s values left-to-right.
+  #[inline]
+  pub fn values(&self) -> Vec<V> {
+    self
+      .inner
+      .values()
+      .flat_map(|vs| vs.iter().cloned())
+      .collect()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use rstest::rstest;
+
+  #[test]
+  fn rbt_insert_duplicate_key_both_values_retrievable() {
+    let mut t = RedBlackTree::empty();
+    t.insert("k", 1_i32);
+    t.insert("k", 2);
+    assert_eq!(t.find(&"k"), &[1, 2][..]);
+    assert_eq!(t.size(), 2);
+  }
+
+  #[test]
+  fn rbt_remove_first_leaves_second() {
+    let mut t = RedBlackTree::empty();
+    t.insert("k", 1_i32);
+    t.insert("k", 2);
+    assert_eq!(t.remove_first(&"k"), Some(1));
+    assert_eq!(t.find(&"k"), &[2][..]);
+    assert_eq!(t.remove_first(&"k"), Some(2));
+    assert!(!t.has(&"k"));
+  }
+
+  #[test]
+  fn rbt_greater_than_returns_correct_range() {
+    let mut t = RedBlackTree::empty();
+    t.insert(1_i32, "a");
+    t.insert(3, "b");
+    t.insert(5, "c");
+    let gt = t.greater_than(&2);
+    assert_eq!(gt, vec![(3, "b"), (5, "c")]);
+  }
+
+  #[rstest]
+  #[case(1_i32, vec![(2, 20), (3, 30)])]
+  #[case(2, vec![(3, 30)])]
+  fn rbt_greater_than_respects_bound(#[case] bound: i32, #[case] expected: Vec<(i32, i32)>) {
+    let mut t = RedBlackTree::empty();
+    t.insert(1, 10);
+    t.insert(2, 20);
+    t.insert(3, 30);
+    assert_eq!(t.greater_than(&bound), expected);
+  }
+}

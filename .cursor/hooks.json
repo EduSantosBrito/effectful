@@ -1,0 +1,39 @@
+{
+	"hooks": {
+		"afterAgentResponse": [
+			{
+				"command": ".cursor/hooks/llm-git-context-append.sh",
+				"timeout": 30
+			}
+		],
+		"afterFileEdit": [
+			{
+				"command": ".cursor/hooks/format-after-edit.sh",
+				"timeout": 5
+			}
+		],
+		"beforeShellExecution": [
+			{
+				"command": ".cursor/hooks/enforce-devenv.sh",
+				"timeout": 5
+			}
+		],
+		"beforeSubmitPrompt": [
+			{
+				"command": ".cursor/hooks/llm-git-context-append.sh",
+				"timeout": 30
+			}
+		],
+		"sessionStart": [
+			{
+				"command": ".cursor/hooks/session-run-activate.sh",
+				"timeout": 5
+			},
+			{
+				"command": ".cursor/hooks/session-register-tool-agent-forum.sh",
+				"timeout": 30
+			}
+		]
+	},
+	"version": 1
+}

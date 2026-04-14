@@ -1,0 +1,10 @@
+# mdbook build output
+**/book/
+
+# xtask output
+site/
+docs/
+target/
+
+# Zone.Identifier files (Windows/WSL artifact)
+*:Zone.Identifier

@@ -1,0 +1,83 @@
+{
+	"mcpServers": {
+		"solana": {
+			"command": "./scripts/solana-mcp-wrapper.sh",
+			"args": [],
+			"disabled": false
+		},
+		"context7": {
+			"command": "npx",
+			"args": ["-y", "@upstash/context7-mcp@latest"],
+			"disabled": false
+		},
+		"ferroscope": {
+			"command": "ferroscope",
+			"args": [],
+			"env": {},
+			"description": "Rust debugging via LLDB/GDB"
+		},
+		"mcp-debugger": {
+			"command": "npx",
+			"args": [
+				"-y",
+				"@debugmcp/mcp-debugger",
+				"stdio",
+				"--log-level",
+				"debug",
+				"--log-file",
+				"./tmp/debug-mcp-server.log"
+			],
+			"disabled": false,
+			"autoApprove": ["create_debug_session", "set_breakpoint", "get_variables"]
+		},
+		"playwright": {
+			"command": "npx",
+			"args": ["-y", "@playwright/mcp@latest"],
+			"disabled": false
+		},
+		"filesystem": {
+			"command": "npx",
+			"args": ["-y", "@modelcontextprotocol/server-filesystem@latest"],
+			"disabled": false
+		},
+		"memory": {
+			"command": "npx",
+			"args": ["-y", "@modelcontextprotocol/server-memory@latest"],
+			"disabled": false
+		},
+		"sequential-thinking": {
+			"command": "npx",
+			"args": ["-y", "@modelcontextprotocol/server-sequential-thinking@latest"],
+			"disabled": false
+		},
+		"fetch": {
+			"command": "uvx",
+			"args": ["mcp-server-fetch"],
+			"disabled": false
+		},
+		"git": {
+			"command": "uvx",
+			"args": ["mcp-server-git"],
+			"disabled": false
+		},
+		"time": {
+			"command": "uvx",
+			"args": ["mcp-server-time"],
+			"disabled": false
+		},
+		"github": {
+			"command": "npx",
+			"args": ["-y", "@modelcontextprotocol/server-github@latest"],
+			"disabled": false
+		},
+		"chrome-devtools": {
+			"command": "npx",
+			"args": ["-y", "chrome-devtools-mcp@latest"]
+		},
+		"postgres": {
+			"command": "./scripts/postgres-mcp-wrapper.sh",
+			"args": [],
+			"disabled": false
+		}
+	}
+}

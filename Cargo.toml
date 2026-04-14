@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+exclude = ["crates/effect-rs-dylint-rules", ".tmp"]
+members = [
+  "crates/effect-rs",
+  "crates/effect-rs-axum",
+  "crates/effect-rs-config",
+  "crates/effect-rs-logger",
+  "crates/effect-rs-macro",
+  "crates/effect-rs-proc-macro",
+  "crates/effect-rs-reqwest",
+  "crates/effect-rs-tokio",
+  "crates/effect-rs-tower",
+]
+
+# `scripts/moon-dylint.sh` uses `cargo dylint` with `DYLINT_LIBRARY_PATH` (Fenix nightly + rustc-dev via `devenv.nix`).
+[workspace.metadata.dylint]
+libraries = [{ path = "crates/effect-rs-dylint-rules" }]
+
+# More stable / comparable Criterion numbers than default bench profile (inherits release).
+[profile.bench]
+lto = "thin"
+codegen-units = 1
