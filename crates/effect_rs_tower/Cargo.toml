@@ -1,0 +1,24 @@
+[package]
+name = "effect_rs_tower"
+version = "0.1.0"
+edition = "2024"
+description = "Tower Service bridge for `effect` programs (runs effects via effect_rs_tokio)"
+
+[lints.rust]
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(coverage)',
+  'cfg(feature, values("mock"))',
+] }
+
+[lib]
+name = "effect_tower"
+
+[dependencies]
+effect_rs = { path = "../effect_rs" }
+effect_rs_tokio = { path = "../effect_rs_tokio" }
+tokio = { version = "1", features = ["sync"] }
+tower = { version = "0.5", features = ["util"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

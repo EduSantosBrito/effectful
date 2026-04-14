@@ -1,16 +1,16 @@
 # https://moonrepo.dev/docs/config/workspace
 $schema: https://moonrepo.dev/schemas/workspace.json
 projects:
-  effect-rs: '.'
-  effect-rs-lib: crates/effect-rs
-  effect-rs-axum: crates/effect-rs-axum
-  effect-rs-config: crates/effect-rs-config
-  effect-rs-logger: crates/effect-rs-logger
-  effect-rs-macro: crates/effect-rs-macro
-  effect-rs-proc-macro: crates/effect-rs-proc-macro
-  effect-rs-reqwest: crates/effect-rs-reqwest
-  effect-rs-tokio: crates/effect-rs-tokio
-  effect-rs-tower: crates/effect-rs-tower
+  effect_rs: '.'
+  effect_rs_lib: crates/effect_rs
+  effect_rs_axum: crates/effect_rs_axum
+  effect_rs_config: crates/effect_rs_config
+  effect_rs_logger: crates/effect_rs_logger
+  effect_rs_macro: crates/effect_rs_macro
+  effect_rs_proc_macro: crates/effect_rs_proc_macro
+  effect_rs_reqwest: crates/effect_rs_reqwest
+  effect_rs_tokio: crates/effect_rs_tokio
+  effect_rs_tower: crates/effect_rs_tower
 vcs:
   defaultBranch: main
   provider: github

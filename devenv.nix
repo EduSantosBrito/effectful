@@ -49,7 +49,7 @@
     doCheck = false;
   };
 in {
-  name = "effect-rs";
+  name = "effect_rs";
 
   dotenv = {
     enable = true;

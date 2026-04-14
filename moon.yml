@@ -1,6 +1,6 @@
 # Root-level workspace tasks
 # https://moonrepo.dev/docs/config/project
-id: 'effect-rs'
+id: 'effect_rs'
 language: 'rust'
 layer: 'application'
 workspace:
@@ -115,12 +115,12 @@ tasks:
   book:
     description: 'Build the Effect.rs mdBook HTML documentation'
     command: 'mdbook'
-    args: ['build', 'crates/effect-rs/book']
+    args: ['build', 'crates/effect_rs/book']
     inputs:
-      - 'crates/effect-rs/book/book.toml'
-      - 'crates/effect-rs/book/src/**/*'
+      - 'crates/effect_rs/book/book.toml'
+      - 'crates/effect_rs/book/src/**/*'
     outputs:
-      - 'crates/effect-rs/book/book'
+      - 'crates/effect_rs/book/book'
     options:
       cache: true
       outputStyle: buffer-only-failure
