@@ -1,4 +1,4 @@
-//! Tokio integration for [`effect`]: [`TokioRuntime`] implements [`effect_rs::Runtime`] with
+//! Tokio integration for [`effect_rs`]: [`TokioRuntime`] implements [`effect_rs::Runtime`] with
 //! cooperative sleep/yield, and **runs forked effects** on Tokio’s **blocking thread pool** via
 //! [`tokio::runtime::Handle::spawn_blocking`] (the `Effect` interpreter is driven with
 //! [`run_blocking`]; it is not `Send` for [`tokio::spawn`]).
@@ -8,7 +8,7 @@
 //! ## Examples
 //!
 //! See `examples/` (e.g. `109_tokio_end_to_end`). Re-exports
-//! [`run_async`], [`run_blocking`], [`run_fork`], and [`yield_now`] from `effect` for use at the
+//! [`run_async`], [`run_blocking`], [`run_fork`], and [`yield_now`] from `effect_rs` for use at the
 //! async boundary alongside [`TokioRuntime`].
 
 #![forbid(unsafe_code)]
