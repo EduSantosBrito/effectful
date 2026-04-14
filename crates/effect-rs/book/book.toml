@@ -11,8 +11,8 @@ build-dir = "book"
 [output.html]
 default-theme = "rust"
 preferred-dark-theme = "coal"
-git-repository-url = "https://github.com/your-org/effect-rs"
-edit-url-template = "https://github.com/your-org/effect-rs/edit/main/crates/effect-rs/book/{path}"
+git-repository-url = "https://github.com/Industrial/effect-rs"
+edit-url-template = "https://github.com/Industrial/effect-rs/edit/main/crates/effect-rs/book/{path}"
 
 [output.html.playground]
 editable = true

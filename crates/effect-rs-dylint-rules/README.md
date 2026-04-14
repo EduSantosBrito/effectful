@@ -27,7 +27,7 @@ cargo build --release
 Prefer **`moon run <crate>:lint`**. For ad-hoc use, mirror `scripts/moon-dylint.sh`: same `PATH`, `RUSTUP_TOOLCHAIN`, `DYLINT_LIBRARY_PATH`, shim, then e.g.:
 
 ```bash
-cargo dylint --no-metadata --all -p syo-vendors
+cargo dylint --no-metadata --all -p effect-rs
 ```
 
 Lints default to **`deny`** when this library is loaded via **`cargo dylint`** / Moon **`:lint`**. Normal `cargo check` / `cargo clippy` without Dylint does not load them. Use targeted **`#[allow(lint_name)]`** only where the Effect.rs skill documents an exception.
@@ -38,9 +38,9 @@ Passes:
 
 | Pass | Crates | Notes |
 |------|--------|--------|
-| `EffectStyleLate` | All **except** names starting with `syo_` or `forge_` (and macro/logger helper crates per code) | Compositional `Effect` style: `effect!`, generics, `run_*` boundaries, `async` policy. |
-| `EffectInteropLate` | All **including** `syo_*`; skipped only for `effect`, `effect_config`, `effect_logger`, `effect_macro`, `effect_proc_macro`, `effect_dylint_rules` | DI and platform escape hatches: raw `Get`, `Effect::new`, `Instant::now`, legacy postfix `~`. |
-| `EffectTracingEarly` | Same exclusions as historical tracing lint (non-`syo_`, etc.) | Forbids `tracing::…` macros. |
+| `EffectStyleLate` | All **except** names starting with `forge_` (and macro/logger helper crates per code) | Compositional `Effect` style: `effect!`, generics, `run_*` boundaries, `async` policy. |
+| `EffectInteropLate` | All application crates; skipped only for `effect`, `effect_config`, `effect_logger`, `effect_macro`, `effect_proc_macro`, `effect_dylint_rules` | DI and platform escape hatches: raw `Get`, `Effect::new`, `Instant::now`, legacy postfix `~`. |
+| `EffectTracingEarly` | Same exclusions as style lint (non-`forge_`, etc.) | Forbids `tracing::…` macros. |
 
 ### `EffectStyleLate`
 

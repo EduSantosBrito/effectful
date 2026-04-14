@@ -451,17 +451,13 @@ For tests that require external services (database, NATS, RPC):
 
 ```rust
 use effect::run_async;
-use syo_db::client::DbClient;
 
 /// Integration test: requires DATABASE_URL pointing to running PostgreSQL.
-/// Run with: `cargo test -p syo-db integration_test_name -- --ignored`
+/// Run with: `cargo test -p my-crate integration_test_name -- --ignored`
 #[tokio::test]
 #[ignore]
 async fn example_db_integration_requires_postgres() {
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL required");
-    let db = run_async(DbClient::connect::<DbClient, syo_db::DbError, ()>(url), ())
-        .await
-        .expect("connect");
+    let _url = std::env::var("DATABASE_URL").expect("DATABASE_URL required");
     // ... test logic
 }
 ```
@@ -477,7 +473,7 @@ async fn example_db_integration_requires_postgres() {
 cargo test
 
 # Run tests for a specific crate
-cargo test -p syo-strategies
+cargo test -p effect-rs
 
 # Run tests matching a pattern
 cargo test quote_from_config
@@ -520,29 +516,6 @@ For a local HTML report without failing on thresholds:
 
 ```bash
 devenv shell -- cargo llvm-cov nextest --html --fail-under-lines 0
-```
-
----
-
-## Backtest pipeline regression smokes (`syo-bar-pipeline` + `syo-backtester-run` + `syo-data-provider`)
-
-Run these after refactors that touch Postgres/DuckDB warmup, lazy Polars pipeline, or `syo backtest` wiring. They should keep passing with **no behavior change** until the migration intentionally replaces them.
-
-**Crate tests (no database):**
-
-```bash
-devenv shell -- cargo test -p syo-backtester-run
-devenv shell -- cargo test -p syo-data-provider fails_with_database_url_hint
-```
-
-The `syo-backtester-run` suite covers `execute_backtest` with `dry_run: true` (no `DATABASE_URL`) and `dry_run: false` without `DATABASE_URL` (expects a `DATABASE_URL` hint). The `syo-data-provider` runner-bars load test covers `load_runner_exec_bars` failing fast when `DATABASE_URL` is unset.
-
-**CLI (manual, optional when you have data):**
-
-```bash
-devenv shell -- cargo run -p syo-cli -- backtest --help
-# With DB + imported bars (example flags vary by your config):
-# devenv shell -- cargo run -p syo-cli -- backtest --dry-run …
 ```
 
 ---

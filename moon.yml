@@ -116,13 +116,27 @@ tasks:
       cache: true
       outputStyle: buffer-only-failure
   docs:
-    description: 'Build documentation'
+    description: 'Build Rust API documentation with cargo doc'
     command: 'cargo'
     args: ['doc', '--no-deps', '--all-features']
     inputs:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '**/*.rs'
+    outputs:
+      - 'target/doc'
+    options:
+      cache: true
+      outputStyle: buffer-only-failure
+  book:
+    description: 'Build the Effect.rs mdBook HTML documentation'
+    command: 'mdbook'
+    args: ['build', 'crates/effect-rs/book']
+    inputs:
+      - 'crates/effect-rs/book/book.toml'
+      - 'crates/effect-rs/book/src/**/*'
+    outputs:
+      - 'crates/effect-rs/book/book'
     options:
       cache: true
       outputStyle: buffer-only-failure

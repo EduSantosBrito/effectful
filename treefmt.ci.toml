@@ -8,9 +8,12 @@
 # Env $TREEFMT_CPU_PROFILE
 # cpu-profile = ./cpu.pprof
 
-# Exclude files or directories matching the specified globs
-# Env $TREEFMT_EXCLUDES
-# excludes = ["*.md", "*.gif"]
+# Exclude vendor/submodule directories that have their own formatting conventions
+excludes = [
+  ".cursor/agency-agents/**",
+  ".cursor/microsoft-rust-training/**",
+  ".cursor/vendor/**",
+]
 
 # Exit with error if any changes were made during execution
 # Useful for CI

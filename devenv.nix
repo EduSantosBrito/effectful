@@ -100,6 +100,7 @@ in {
     treefmt
     vulnix
     yamlfmt
+    mdbook
   ];
 
   env = {

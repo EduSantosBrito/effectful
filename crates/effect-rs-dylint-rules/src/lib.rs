@@ -4,9 +4,9 @@
 //! Lints default to **`deny`** so `cargo dylint` / Moon `:lint` enforces project rules.
 //!
 //! - **`EffectStyleLate`**: style rules for compositional `Effect` code. Crates whose names start with
-//!   `syo_` or `forge_` are skipped so `syo-*` / `forge-*` packages need no crate-level `#![allow]`.
-//! - **`EffectInteropLate`**: dependency-injection and boundary rules that **do** apply to `syo_*`
-//!   and other application crates; skips only the `effect` runtime / macro crates that implement the
+//!   `forge_` are skipped so `forge-*` packages need no crate-level `#![allow]`.
+//! - **`EffectInteropLate`**: dependency-injection and boundary rules that apply to all application
+//!   crates; skips only the `effect` runtime / macro crates that implement the
 //!   system (see `effect_interop_skip_crate`).
 //!
 //! `Effect`-returning functions are expected to use a **single** top-level `effect!(…)` body
@@ -233,13 +233,12 @@ fn is_effect_adt(cx: &LateContext<'_>, did: DefId) -> bool {
   cx.tcx.item_name(did).as_str() == "Effect" && cx.tcx.crate_name(did.krate).as_str() == "effect"
 }
 
-/// Proc-macro and logger crates implement Effect.rs infrastructure. `syo_*` and `forge_*` packages
+/// Proc-macro and logger crates implement Effect.rs infrastructure. `forge_*` packages
 /// opt out of style lints at the driver (no `#![allow]` in those crates); other compositional code is still checked.
 fn effect_style_late_skip_crate(cx: &LateContext<'_>) -> bool {
   let sym = cx.tcx.crate_name(LOCAL_CRATE);
   let name = sym.as_str();
-  name.starts_with("syo_")
-    || name.starts_with("forge_")
+  name.starts_with("forge_")
     || matches!(name, "effect_logger" | "effect_macro" | "effect_proc_macro")
 }
 
@@ -354,7 +353,7 @@ fn is_effect_new_method(cx: &LateContext<'_>, def_id: DefId) -> bool {
 }
 
 /// Skip crates that *implement* the effect system and DI helpers (`effect_config`, `effect_logger`);
-/// application crates (including `syo_*`) are checked.
+/// application crates are checked.
 fn effect_interop_skip_crate(cx: &LateContext<'_>) -> bool {
   let sym = cx.tcx.crate_name(LOCAL_CRATE);
   let name = sym.as_str();
@@ -740,7 +739,7 @@ impl EarlyLintPass for EffectTracingEarly {
     let Some(name) = cx.sess().opts.crate_name.as_deref() else {
       return;
     };
-    if name.starts_with("syo_") {
+    if name.starts_with("forge_") {
       return;
     }
     if matches!(

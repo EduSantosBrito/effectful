@@ -59,6 +59,7 @@
 /data/
 /target/
 /tmp/
+crates/effect-rs/book/book/
 Cargo.lock
 Thumbs.db
 \!logs/.gitkeep

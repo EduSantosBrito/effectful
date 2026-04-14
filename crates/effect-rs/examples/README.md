@@ -35,4 +35,4 @@ Examples are named `NNN_slug.rs` (three-digit order + short topic). Run from the
 | 108 | `108_tokio_clock.rs` | `now` / time with external Tokio runtime |
 | 109 | `109_tokio_end_to_end.rs` | `req!`, streams, `catch`, full pipeline |
 
-Curriculum work is tracked with **tool-tasks** (see `.cursor/rules/tool-tasks.mdc`). Older docs may cite epic id `solana-yield-optimizer-qqre` from a previous tracker.
+Curriculum work is tracked with **tool-tasks** (see `.cursor/rules/tool-tasks.mdc`).
