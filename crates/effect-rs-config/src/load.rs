@@ -264,10 +264,10 @@ where
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::config_env;
   use crate::ConfigEnv;
   use crate::MapConfigProvider;
   use crate::ProviderOptions;
+  use crate::config_env;
   use ::effect::run_blocking;
 
   fn env_map(pairs: &[(&str, &str)]) -> ConfigEnv {
@@ -293,8 +293,11 @@ mod tests {
     .unwrap();
     assert_eq!(v, "hello");
 
-    let err = run_blocking(read_string::<String, ConfigError, _>(&["MISSING"]), env_map(&[]))
-      .unwrap_err();
+    let err = run_blocking(
+      read_string::<String, ConfigError, _>(&["MISSING"]),
+      env_map(&[]),
+    )
+    .unwrap_err();
     assert!(matches!(err, ConfigError::Missing { .. }));
   }
 
@@ -324,8 +327,11 @@ mod tests {
     .unwrap();
     assert!((n - 3.5).abs() < f64::EPSILON);
 
-    let err = run_blocking(read_number::<f64, ConfigError, _>(&["MISSING"]), env_map(&[]))
-      .unwrap_err();
+    let err = run_blocking(
+      read_number::<f64, ConfigError, _>(&["MISSING"]),
+      env_map(&[]),
+    )
+    .unwrap_err();
     assert!(matches!(err, ConfigError::Missing { .. }));
 
     let err = run_blocking(
@@ -338,12 +344,15 @@ mod tests {
 
   #[test]
   fn read_i64_ok_missing_invalid() {
-    let n: i64 =
-      run_blocking(read_i64::<i64, ConfigError, _>(&["N"]), env_map(&[("N", "-42")])).unwrap();
+    let n: i64 = run_blocking(
+      read_i64::<i64, ConfigError, _>(&["N"]),
+      env_map(&[("N", "-42")]),
+    )
+    .unwrap();
     assert_eq!(n, -42);
 
-    let err = run_blocking(read_i64::<i64, ConfigError, _>(&["MISSING"]), env_map(&[]))
-      .unwrap_err();
+    let err =
+      run_blocking(read_i64::<i64, ConfigError, _>(&["MISSING"]), env_map(&[])).unwrap_err();
     assert!(matches!(err, ConfigError::Missing { .. }));
 
     let err = run_blocking(
@@ -373,8 +382,11 @@ mod tests {
       assert_eq!(b, expected, "raw={raw}");
     }
 
-    let err = run_blocking(read_bool::<bool, ConfigError, _>(&["MISSING"]), env_map(&[]))
-      .unwrap_err();
+    let err = run_blocking(
+      read_bool::<bool, ConfigError, _>(&["MISSING"]),
+      env_map(&[]),
+    )
+    .unwrap_err();
     assert!(matches!(err, ConfigError::Missing { .. }));
 
     let err = run_blocking(
@@ -397,8 +409,11 @@ mod tests {
       },
     );
     let env = config_env(p);
-    let tags: Vec<String> =
-      run_blocking(read_string_list::<Vec<String>, ConfigError, _>(&["TAGS"]), env).unwrap();
+    let tags: Vec<String> = run_blocking(
+      read_string_list::<Vec<String>, ConfigError, _>(&["TAGS"]),
+      env,
+    )
+    .unwrap();
     assert_eq!(tags, vec!["a", "b", "c"]);
   }
 
@@ -421,11 +436,7 @@ mod tests {
 
   #[test]
   fn read_with_empty_path_is_invalid() {
-    let err = run_blocking(
-      read_string::<String, ConfigError, _>(&[]),
-      env_map(&[]),
-    )
-    .unwrap_err();
+    let err = run_blocking(read_string::<String, ConfigError, _>(&[]), env_map(&[])).unwrap_err();
     assert!(matches!(err, ConfigError::Invalid { .. }));
   }
 

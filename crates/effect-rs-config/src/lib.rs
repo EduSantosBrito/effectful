@@ -583,10 +583,7 @@ port = 3000
     let p = MapConfigProvider::from_pairs([("A_B_C_D", "nested")]);
     let scoped = ScopedConfigProvider::new(p, "A.B");
     assert_eq!(scoped.prefix_segments(), &["A", "B"]);
-    assert_eq!(
-      config::nested_string(&scoped, "C", "D").unwrap(),
-      "nested"
-    );
+    assert_eq!(config::nested_string(&scoped, "C", "D").unwrap(), "nested");
     assert_eq!(config::string(scoped.inner(), "A_B_C_D").unwrap(), "nested");
   }
 

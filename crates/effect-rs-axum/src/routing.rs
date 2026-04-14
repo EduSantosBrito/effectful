@@ -334,7 +334,7 @@ mod tests {
   use axum::http::{Method, Request, StatusCode};
   use axum::routing::{MethodFilter, Router};
   use effect::duration::Duration;
-  use effect::{fail, succeed, Effect, Metric};
+  use effect::{Effect, Metric, fail, succeed};
   use tower::ServiceExt;
 
   use super::*;
@@ -383,12 +383,7 @@ mod tests {
     }
 
     let res = app
-      .oneshot(
-        Request::builder()
-          .uri("/e")
-          .body(Body::empty())
-          .unwrap(),
-      )
+      .oneshot(Request::builder().uri("/e").body(Body::empty()).unwrap())
       .await
       .unwrap();
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
