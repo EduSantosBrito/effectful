@@ -16,8 +16,10 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 name = "effect_axum"
 
 [dependencies]
-effect_rs = { path = "../effect_rs", features = ["schema-serde"] }
-effect_rs_tokio = { path = "../effect_rs_tokio" }
+effect_rs = { path = "../effect_rs", version = "0.1.0", features = [
+  "schema-serde",
+] }
+effect_rs_tokio = { path = "../effect_rs_tokio", version = "0.1.0" }
 axum = { version = "0.7" }
 http-body-util = "0.1"
 serde = { version = "1", features = ["derive"] }

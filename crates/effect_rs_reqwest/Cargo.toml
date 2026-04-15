@@ -17,7 +17,9 @@ name = "effect_reqwest"
 
 [dependencies]
 bytes = "1"
-effect_rs = { path = "../effect_rs", features = ["schema-serde"] }
+effect_rs = { path = "../effect_rs", version = "0.1.0", features = [
+  "schema-serde",
+] }
 # `default-features = false` + `rustls-tls`: avoid `native-tls` → ancient `openssl-sys`
 # lower bounds that break `cargo update -Z minimal-versions` on OpenSSL 3 (CI / modern Linux).
 reqwest = { version = "0.12", default-features = false, features = [
@@ -29,6 +31,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [dev-dependencies]
-effect_rs_tokio = { path = "../effect_rs_tokio" }
+effect_rs_tokio = { path = "../effect_rs_tokio", version = "0.1.0" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 wiremock = "0.6"

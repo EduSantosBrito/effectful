@@ -15,8 +15,8 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 name = "effect_tower"
 
 [dependencies]
-effect_rs = { path = "../effect_rs" }
-effect_rs_tokio = { path = "../effect_rs_tokio" }
+effect_rs = { path = "../effect_rs", version = "0.1.0" }
+effect_rs_tokio = { path = "../effect_rs_tokio", version = "0.1.0" }
 tokio = { version = "1", features = ["sync"] }
 # 0.5.0 does not build under minimal-version resolution (const / Identity::new).
 tower = { version = "0.5.3", features = ["util"] }
