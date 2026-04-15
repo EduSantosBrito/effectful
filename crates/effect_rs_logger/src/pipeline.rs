@@ -262,3 +262,185 @@ impl<W: Write + Send + 'static> LogBackend for StructuredLogBackend<W> {
     Ok(())
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::borrow::Cow;
+
+  fn make_record(level: crate::LogLevel, msg: &str) -> LogRecord<'_> {
+    LogRecord {
+      level,
+      message: Cow::Borrowed(msg),
+      annotations: Default::default(),
+      spans: vec![],
+    }
+  }
+
+  fn make_record_with_spans(
+    level: crate::LogLevel,
+    msg: &str,
+    spans: Vec<String>,
+  ) -> LogRecord<'_> {
+    LogRecord {
+      level,
+      message: Cow::Borrowed(msg),
+      annotations: Default::default(),
+      spans,
+    }
+  }
+
+  #[test]
+  fn composite_new_and_default_are_empty() {
+    let c1 = CompositeLogBackend::new();
+    let c2 = CompositeLogBackend::default();
+    let rec = make_record(crate::LogLevel::Info, "msg");
+    assert!(c1.emit_all(&rec).is_ok());
+    assert!(c2.emit_all(&rec).is_ok());
+  }
+
+  #[test]
+  fn composite_add_and_emit_all() {
+    let buf: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
+    let buf2 = buf.clone();
+    struct Capturing(Arc<Mutex<Vec<String>>>);
+    impl LogBackend for Capturing {
+      fn emit(&self, rec: &LogRecord<'_>) -> Result<(), EffectLoggerError> {
+        self.0.lock().unwrap().push(rec.message.to_string());
+        Ok(())
+      }
+    }
+    let composite = CompositeLogBackend::new();
+    composite.add(Arc::new(Capturing(buf2))).unwrap();
+    let rec = make_record(crate::LogLevel::Info, "hello");
+    composite.emit(&rec).unwrap();
+    assert_eq!(*buf.lock().unwrap(), vec!["hello"]);
+  }
+
+  #[test]
+  fn composite_replace_success_and_out_of_bounds() {
+    struct Noop;
+    impl LogBackend for Noop {
+      fn emit(&self, _rec: &LogRecord<'_>) -> Result<(), EffectLoggerError> {
+        Ok(())
+      }
+    }
+    let composite = CompositeLogBackend::new();
+    composite.add(Arc::new(Noop)).unwrap();
+    assert!(composite.replace(0, Arc::new(Noop)).is_ok());
+    assert!(composite.replace(99, Arc::new(Noop)).is_err());
+  }
+
+  #[test]
+  fn composite_remove_success_and_out_of_bounds() {
+    struct Noop;
+    impl LogBackend for Noop {
+      fn emit(&self, _rec: &LogRecord<'_>) -> Result<(), EffectLoggerError> {
+        Ok(())
+      }
+    }
+    let composite = CompositeLogBackend::new();
+    composite.add(Arc::new(Noop)).unwrap();
+    assert!(composite.remove(99).is_err());
+    assert!(composite.remove(0).is_ok());
+    assert!(composite.remove(0).is_err());
+  }
+
+  #[test]
+  fn tracing_backend_emits_all_levels_without_error() {
+    let backend = TracingLogBackend;
+    for level in [
+      crate::LogLevel::Trace,
+      crate::LogLevel::Debug,
+      crate::LogLevel::Info,
+      crate::LogLevel::Warn,
+      crate::LogLevel::Error,
+      crate::LogLevel::Fatal,
+      crate::LogLevel::None,
+    ] {
+      let rec = make_record(level, "test message");
+      assert!(backend.emit(&rec).is_ok());
+    }
+  }
+
+  #[test]
+  fn tracing_backend_with_spans_and_annotations() {
+    let backend = TracingLogBackend;
+    let mut rec = make_record_with_spans(
+      crate::LogLevel::Info,
+      "spanmsg",
+      vec!["outer".to_string(), "inner".to_string()],
+    );
+    rec.annotations.insert("key".to_string(), "val".to_string());
+    assert!(backend.emit(&rec).is_ok());
+  }
+
+  #[test]
+  fn json_backend_emits_valid_json_line() {
+    let buf: Vec<u8> = Vec::new();
+    let backend = JsonLogBackend::new(buf);
+    let rec = make_record(crate::LogLevel::Info, "json message");
+    backend.emit(&rec).unwrap();
+    let arc = backend.writer_arc();
+    let out = String::from_utf8(arc.lock().unwrap().clone()).unwrap();
+    assert!(out.contains("json message"), "output: {out}");
+    assert!(out.contains("INFO"), "output: {out}");
+  }
+
+  #[test]
+  fn json_backend_none_level_skips_emit() {
+    let buf: Vec<u8> = Vec::new();
+    let backend = JsonLogBackend::new(buf);
+    let rec = make_record(crate::LogLevel::None, "skip me");
+    backend.emit(&rec).unwrap();
+    let arc = backend.writer_arc();
+    assert!(arc.lock().unwrap().is_empty(), "should skip None level");
+  }
+
+  #[test]
+  fn json_backend_emits_spans_and_fields() {
+    let buf: Vec<u8> = Vec::new();
+    let backend = JsonLogBackend::new(buf);
+    let mut rec =
+      make_record_with_spans(crate::LogLevel::Debug, "with spans", vec!["s1".to_string()]);
+    rec.annotations.insert("foo".to_string(), "bar".to_string());
+    backend.emit(&rec).unwrap();
+    let arc = backend.writer_arc();
+    let out = String::from_utf8(arc.lock().unwrap().clone()).unwrap();
+    assert!(out.contains("s1"), "output: {out}");
+    assert!(out.contains("foo"), "output: {out}");
+  }
+
+  #[test]
+  fn structured_backend_emits_kv_line() {
+    let buf: Vec<u8> = Vec::new();
+    let backend = StructuredLogBackend::new(buf);
+    let mut rec = make_record(crate::LogLevel::Warn, "warn msg");
+    rec.annotations.insert("a".to_string(), "b".to_string());
+    backend.emit(&rec).unwrap();
+    let arc = backend.writer_arc();
+    let out = String::from_utf8(arc.lock().unwrap().clone()).unwrap();
+    assert!(out.contains("warn msg"), "output: {out}");
+  }
+
+  #[test]
+  fn structured_backend_none_level_skips_emit() {
+    let buf: Vec<u8> = Vec::new();
+    let backend = StructuredLogBackend::new(buf);
+    let rec = make_record(crate::LogLevel::None, "skip");
+    backend.emit(&rec).unwrap();
+    let arc = backend.writer_arc();
+    assert!(arc.lock().unwrap().is_empty());
+  }
+
+  #[test]
+  fn structured_backend_with_spans() {
+    let buf: Vec<u8> = Vec::new();
+    let backend = StructuredLogBackend::new(buf);
+    let rec = make_record_with_spans(crate::LogLevel::Error, "err msg", vec!["spn".to_string()]);
+    backend.emit(&rec).unwrap();
+    let arc = backend.writer_arc();
+    let out = String::from_utf8(arc.lock().unwrap().clone()).unwrap();
+    assert!(out.contains("spn"), "output: {out}");
+  }
+}

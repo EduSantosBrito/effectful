@@ -903,7 +903,9 @@ mod tests {
 
   #[test]
   fn timezone_error_display_and_error_trait() {
-    let err = timezone::TimeZoneError { id: "Bad/Zone".into() };
+    let err = timezone::TimeZoneError {
+      id: "Bad/Zone".into(),
+    };
     let s = format!("{err}");
     assert!(s.contains("Bad/Zone"), "display should mention the id: {s}");
     use std::error::Error;

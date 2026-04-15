@@ -386,7 +386,11 @@ mod tests {
     assert!(!ps.is_shutdown());
     run_async(ps.shutdown(), ()).await.expect("shutdown");
     assert!(ps.is_shutdown());
-    assert!(!run_async(ps.publish(1), ()).await.expect("pub after shutdown"));
+    assert!(
+      !run_async(ps.publish(1), ())
+        .await
+        .expect("pub after shutdown")
+    );
   }
 
   #[tokio::test]
@@ -446,7 +450,11 @@ mod tests {
     run_async(ps.shutdown(), ()).await.expect("shutdown");
     assert_eq!(run_async(ps.size(), ()).await.expect("size"), 0);
     assert!(run_async(ps.is_empty(), ()).await.expect("empty"));
-    assert!(run_async(ps.is_full(), ()).await.expect("full after shutdown"));
+    assert!(
+      run_async(ps.is_full(), ())
+        .await
+        .expect("full after shutdown")
+    );
   }
 
   // ── publish_all ───────────────────────────────────────────────────────────

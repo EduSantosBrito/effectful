@@ -1144,7 +1144,8 @@ mod tests {
     let q = run_blocking(Queue::<i32>::unbounded(), ()).expect("q");
     let ch = Channel::<i32, i32, (), QueueError, ()>::from_queue_and_map(q, |x| x);
     let sink = ch.to_sink();
-    let source = Stream::<i32, QueueError, ()>::from_effect(crate::kernel::succeed(vec![10_i32, 20, 30]));
+    let source =
+      Stream::<i32, QueueError, ()>::from_effect(crate::kernel::succeed(vec![10_i32, 20, 30]));
     block_on_effect(sink.run(source)).expect("run sink");
     assert_eq!(block_on_effect(ch.read()).expect("r1"), Some(10));
     assert_eq!(block_on_effect(ch.read()).expect("r2"), Some(20));

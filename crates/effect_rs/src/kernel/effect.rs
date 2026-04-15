@@ -1327,13 +1327,10 @@ mod tests {
       let released = Arc::new(Mutex::new(false));
       let rel_clone = Arc::clone(&released);
       let result = run(
-        acquire_release(
-          succeed::<i32, (), ()>(42),
-          move |_v| {
-            *rel_clone.lock().unwrap() = true;
-            succeed::<(), (), ()>(())
-          },
-        ),
+        acquire_release(succeed::<i32, (), ()>(42), move |_v| {
+          *rel_clone.lock().unwrap() = true;
+          succeed::<(), (), ()>(())
+        }),
         (),
       );
       assert_eq!(result, Ok(42));
@@ -1342,10 +1339,7 @@ mod tests {
 
     #[test]
     fn scope_with_creates_and_closes_scope() {
-      let result = run(
-        scope_with(|_scope| succeed::<i32, (), ()>(7)),
-        (),
-      );
+      let result = run(scope_with(|_scope| succeed::<i32, (), ()>(7)), ());
       assert_eq!(result, Ok(7));
     }
 
@@ -1416,10 +1410,7 @@ mod tests {
     fn box_future_wraps_ready_future() {
       use core::future::ready;
       let fut = box_future(ready(Ok::<i32, ()>(5)));
-      let result = crate::runtime::run_blocking(
-        Effect::<i32, (), ()>::new_async(|_| fut),
-        (),
-      );
+      let result = crate::runtime::run_blocking(Effect::<i32, (), ()>::new_async(|_| fut), ());
       assert_eq!(result, Ok(5));
     }
   }

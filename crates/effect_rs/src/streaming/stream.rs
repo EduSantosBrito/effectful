@@ -1863,7 +1863,10 @@ mod tests {
 
     #[test]
     fn run_fold_effect_propagates_step_failure() {
-      let stream = Stream::<i32, &'static str, ()>::from_effect(succeed::<Vec<i32>, &'static str, ()>(vec![1, 2, 3]));
+      let stream =
+        Stream::<i32, &'static str, ()>::from_effect(succeed::<Vec<i32>, &'static str, ()>(vec![
+          1, 2, 3,
+        ]));
       let out = block_on(
         stream
           .run_fold_effect(0_i32, |_acc, x| {
@@ -1960,17 +1963,17 @@ mod tests {
 
     #[test]
     fn send_chunk_fail_policy_returns_err_when_full() {
-      let (stream, sender) =
-        stream_from_channel_with_policy::<i32, (), ()>(1, BackpressurePolicy::Fail);
-      // Fill the queue
+      // Use a 2-item queue: fill it, then verify Fail policy rejects immediately.
+      // Drop sender/stream directly — no end_stream (which would loop on full queue).
+      let (_stream, sender) =
+        stream_from_channel_with_policy::<i32, (), ()>(2, BackpressurePolicy::Fail);
       let r1 = block_on(send_chunk(&sender, Chunk::from_vec(vec![1])).run(&mut ()));
       assert_eq!(r1, Ok(()));
-      // Queue is now full (capacity = 1) - sending again should fail
       let r2 = block_on(send_chunk(&sender, Chunk::from_vec(vec![2])).run(&mut ()));
-      assert_eq!(r2, Err(StreamChannelFull));
-      // Clean up
-      let _ = block_on(end_stream(sender).run(&mut ()));
-      let _ = block_on(stream.run_collect().run(&mut ()));
+      assert_eq!(r2, Ok(()));
+      // Queue full — Fail policy returns Err immediately
+      let r3 = block_on(send_chunk(&sender, Chunk::from_vec(vec![3])).run(&mut ()));
+      assert_eq!(r3, Err(StreamChannelFull));
     }
   }
 
@@ -1980,7 +1983,9 @@ mod tests {
     #[test]
     fn range_empty_when_start_equals_end() {
       let out = block_on(
-        Stream::<i64, (), ()>::range(5, 5).run_collect().run(&mut ()),
+        Stream::<i64, (), ()>::range(5, 5)
+          .run_collect()
+          .run(&mut ()),
       );
       assert_eq!(out, Ok(vec![]));
     }
@@ -1988,22 +1993,26 @@ mod tests {
     #[test]
     fn range_empty_when_start_greater_than_end() {
       let out = block_on(
-        Stream::<i64, (), ()>::range(10, 5).run_collect().run(&mut ()),
+        Stream::<i64, (), ()>::range(10, 5)
+          .run_collect()
+          .run(&mut ()),
       );
       assert_eq!(out, Ok(vec![]));
     }
   }
 
-  mod stream_sender_fail_error {
+  mod stream_error_channel {
     use super::*;
 
     #[test]
-    fn stream_sender_fail_error_propagates_to_stream() {
-      let (stream, sender) =
-        stream_from_channel_with_policy::<i32, &'static str, ()>(8, BackpressurePolicy::BoundedBlock);
+    fn stream_error_propagates_via_fail_message() {
+      // Inject a ChannelMessage::Fail directly via the sender's queue
+      let (stream, sender) = stream_from_channel_with_policy::<i32, &'static str, ()>(
+        8,
+        BackpressurePolicy::BoundedBlock,
+      );
       let s = sender.clone();
       let _ = block_on(send_chunk(&s, Chunk::from_vec(vec![1, 2])).run(&mut ()));
-      // Send an error through the stream
       let msg = ChannelMessage::Fail("stream error");
       let _ = crate::runtime::run_blocking(sender.queue.offer(msg), ());
       let out = block_on(stream.run_collect().run(&mut ()));

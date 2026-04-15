@@ -148,4 +148,33 @@ mod tests {
       assert_eq!(h.join().await, Ok(7));
     });
   }
+
+  #[tokio::test]
+  async fn from_handle_uses_current_context() {
+    let handle = tokio::runtime::Handle::current();
+    let rt = TokioRuntime::from_handle(handle);
+    // sleep and yield_now work under current context
+    assert_eq!(
+      run_async(rt.sleep(Duration::from_millis(0)), ()).await,
+      Ok(())
+    );
+    assert_eq!(run_async(yield_now(&rt), ()).await, Ok(()));
+  }
+
+  #[tokio::test]
+  async fn current_succeeds_inside_tokio_context() {
+    let rt = TokioRuntime::current().expect("current should work inside #[tokio::test]");
+    assert_eq!(
+      run_async(rt.sleep(Duration::from_millis(0)), ()).await,
+      Ok(())
+    );
+  }
+
+  #[test]
+  fn now_returns_monotonic_instant() {
+    let rt = TokioRuntime::new_current_thread().expect("runtime");
+    let t1 = rt.now();
+    let t2 = rt.now();
+    assert!(t2 >= t1, "now() should be non-decreasing");
+  }
 }

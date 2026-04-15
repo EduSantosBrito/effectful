@@ -791,7 +791,10 @@ mod tests {
   fn queue_take_between_returns_err_when_shut_down_empty() {
     let q = drive(Queue::<u32>::bounded(4), ()).unwrap();
     drive(q.shutdown(), ()).unwrap();
-    assert_eq!(drive(q.take_between(1, 3), ()), Err(QueueError::Disconnected));
+    assert_eq!(
+      drive(q.take_between(1, 3), ()),
+      Err(QueueError::Disconnected)
+    );
   }
 
   // ── offer after shutdown ─────────────────────────────────────────────────

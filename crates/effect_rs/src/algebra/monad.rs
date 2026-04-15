@@ -316,8 +316,14 @@ mod tests {
 
     #[test]
     fn filter_map_maps_and_filters() {
-      assert_eq!(option::filter_map(Some(4), |x| if x > 2 { Some(x * 10) } else { None }), Some(40));
-      assert_eq!(option::filter_map(Some(1), |x| if x > 2 { Some(x * 10) } else { None }), None);
+      assert_eq!(
+        option::filter_map(Some(4), |x| if x > 2 { Some(x * 10) } else { None }),
+        Some(40)
+      );
+      assert_eq!(
+        option::filter_map(Some(1), |x| if x > 2 { Some(x * 10) } else { None }),
+        None
+      );
       assert_eq!(option::filter_map(None::<i32>, |x| Some(x)), None);
     }
 

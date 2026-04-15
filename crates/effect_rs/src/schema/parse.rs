@@ -1206,14 +1206,32 @@ mod tests {
 
     #[test]
     fn struct4_decode_wire_success() {
-      let s = struct4("a", i64::<()>(), "b", bool_::<()>(), "c", string::<()>(), "d", f64::<()>());
+      let s = struct4(
+        "a",
+        i64::<()>(),
+        "b",
+        bool_::<()>(),
+        "c",
+        string::<()>(),
+        "d",
+        f64::<()>(),
+      );
       let got = s.decode((1_i64, true, "x".to_string(), 2.5_f64)).unwrap();
       assert_eq!(got, (1_i64, true, "x".to_string(), 2.5_f64));
     }
 
     #[test]
     fn struct4_encode_round_trip() {
-      let s = struct4("a", i64::<()>(), "b", i64::<()>(), "c", i64::<()>(), "d", i64::<()>());
+      let s = struct4(
+        "a",
+        i64::<()>(),
+        "b",
+        i64::<()>(),
+        "c",
+        i64::<()>(),
+        "d",
+        i64::<()>(),
+      );
       let val = (1_i64, 2_i64, 3_i64, 4_i64);
       let encoded = s.encode(val);
       assert_eq!(encoded, (1_i64, 2_i64, 3_i64, 4_i64));
@@ -1221,7 +1239,16 @@ mod tests {
 
     #[test]
     fn struct4_decode_unknown_missing_field_errors() {
-      let s = struct4("a", i64::<()>(), "b", i64::<()>(), "c", i64::<()>(), "d", i64::<()>());
+      let s = struct4(
+        "a",
+        i64::<()>(),
+        "b",
+        i64::<()>(),
+        "c",
+        i64::<()>(),
+        "d",
+        i64::<()>(),
+      );
       let mut m = BTreeMap::new();
       m.insert("a".into(), Unknown::I64(1));
       m.insert("b".into(), Unknown::I64(2));

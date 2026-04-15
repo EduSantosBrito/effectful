@@ -518,4 +518,242 @@ mod tests {
       e => panic!("unexpected {e:?}"),
     }
   }
+
+  // ── Additional HTTP method tests ──────────────────────────────────────────
+
+  #[tokio::test]
+  async fn bytes_roundtrip() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+      .and(path("/data"))
+      .respond_with(ResponseTemplate::new(200).set_body_bytes(b"hello"))
+      .mount(&server)
+      .await;
+
+    let url = format!("{}/data", server.uri());
+    let env = service_env::<ReqwestClientKey, _>(Client::new());
+    let body = run_async(bytes::<bytes::Bytes, Error, _, _>(move |c| c.get(url)), env)
+      .await
+      .unwrap();
+    assert_eq!(body.as_ref(), b"hello");
+  }
+
+  #[tokio::test]
+  async fn get_helper_fetches_text() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+      .and(path("/hello"))
+      .respond_with(ResponseTemplate::new(200).set_body_string("world"))
+      .mount(&server)
+      .await;
+
+    let url = format!("{}/hello", server.uri());
+    let env = service_env::<ReqwestClientKey, _>(Client::new());
+    let body = run_async(
+      get::<Response, Error, _>(url).flat_map(|resp: Response| {
+        effect_rs::from_async(
+          move |_r: &mut _| async move { resp.text().await.map_err(|e| e.into()) },
+        )
+      }),
+      env,
+    )
+    .await
+    .unwrap();
+    assert_eq!(body, "world");
+  }
+
+  #[tokio::test]
+  async fn post_helper_sends_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+      .and(path("/echo"))
+      .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+      .mount(&server)
+      .await;
+
+    let url = format!("{}/echo", server.uri());
+    let env = service_env::<ReqwestClientKey, _>(Client::new());
+    let body = run_async(
+      post::<Response, Error, _>(url).flat_map(|resp: Response| {
+        effect_rs::from_async(
+          move |_r: &mut _| async move { resp.text().await.map_err(|e| e.into()) },
+        )
+      }),
+      env,
+    )
+    .await
+    .unwrap();
+    assert_eq!(body, "ok");
+  }
+
+  #[tokio::test]
+  async fn put_helper_sends_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+      .and(path("/item"))
+      .respond_with(ResponseTemplate::new(200).set_body_string("updated"))
+      .mount(&server)
+      .await;
+
+    let url = format!("{}/item", server.uri());
+    let env = service_env::<ReqwestClientKey, _>(Client::new());
+    let body = run_async(
+      put::<Response, Error, _>(url).flat_map(|resp: Response| {
+        effect_rs::from_async(
+          move |_r: &mut _| async move { resp.text().await.map_err(|e| e.into()) },
+        )
+      }),
+      env,
+    )
+    .await
+    .unwrap();
+    assert_eq!(body, "updated");
+  }
+
+  #[tokio::test]
+  async fn delete_helper_sends_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+      .and(path("/item"))
+      .respond_with(ResponseTemplate::new(204))
+      .mount(&server)
+      .await;
+
+    let url = format!("{}/item", server.uri());
+    let env = service_env::<ReqwestClientKey, _>(Client::new());
+    let resp = run_async(delete::<Response, Error, _>(url), env)
+      .await
+      .unwrap();
+    assert_eq!(resp.status().as_u16(), 204);
+  }
+
+  #[tokio::test]
+  async fn patch_helper_sends_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("PATCH"))
+      .and(path("/item"))
+      .respond_with(ResponseTemplate::new(200).set_body_string("patched"))
+      .mount(&server)
+      .await;
+
+    let url = format!("{}/item", server.uri());
+    let env = service_env::<ReqwestClientKey, _>(Client::new());
+    let body = run_async(
+      patch::<Response, Error, _>(url).flat_map(|resp: Response| {
+        effect_rs::from_async(
+          move |_r: &mut _| async move { resp.text().await.map_err(|e| e.into()) },
+        )
+      }),
+      env,
+    )
+    .await
+    .unwrap();
+    assert_eq!(body, "patched");
+  }
+
+  #[tokio::test]
+  async fn head_helper_sends_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("HEAD"))
+      .and(path("/status"))
+      .respond_with(ResponseTemplate::new(200))
+      .mount(&server)
+      .await;
+
+    let url = format!("{}/status", server.uri());
+    let env = service_env::<ReqwestClientKey, _>(Client::new());
+    let resp = run_async(head::<Response, Error, _>(url), env)
+      .await
+      .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+  }
+
+  #[tokio::test]
+  async fn layer_reqwest_client_with_custom_client() {
+    let layer = layer_reqwest_client(Client::new());
+    let cell = layer.build().unwrap();
+    assert!(cell.value.get("https://example.com").build().is_ok());
+  }
+
+  #[tokio::test]
+  async fn layer_reqwest_client_with_builder() {
+    let builder = Client::builder().timeout(Duration::from_secs(30));
+    let layer = layer_reqwest_client_with(builder).unwrap();
+    let cell = layer.build().unwrap();
+    assert!(cell.value.get("https://example.com").build().is_ok());
+  }
+
+  #[tokio::test]
+  async fn layer_reqwest_pool_builds_pool() {
+    let layer = layer_reqwest_pool(2, Duration::from_secs(60));
+    let cell = layer.build().expect("pool layer build");
+    let s = Scope::make();
+    let client = run_async(cell.value.get(), s.clone()).await.expect("get");
+    let _ = client.allocation_ptr();
+    s.close();
+  }
+
+  // ── JsonSchemaError display / error traits ────────────────────────────────
+
+  #[test]
+  fn json_schema_error_http_display() {
+    // Create a fake HTTP error by making a bad URL request
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let err = rt.block_on(async {
+      Client::new()
+        .get("not-a-url")
+        .send()
+        .await
+        .map_err(JsonSchemaError::Http)
+        .unwrap_err()
+    });
+    let _ = format!("{err:?}");
+  }
+
+  #[test]
+  fn json_schema_error_json_debug() {
+    let e = JsonSchemaError::Json("bad json".to_string());
+    let s = format!("{e:?}");
+    assert!(s.contains("bad json"), "debug: {s}");
+  }
+
+  #[test]
+  fn json_schema_error_schema_debug() {
+    let e = JsonSchemaError::Schema(effect_rs::schema::ParseError::new("field", "invalid"));
+    let _ = format!("{e:?}");
+  }
+
+  #[test]
+  fn pooled_client_partial_eq_same_arc() {
+    let client = Client::new();
+    let arc = Arc::new(client);
+    let a = PooledClient(arc.clone());
+    let b = PooledClient(arc.clone());
+    assert_eq!(a, b);
+  }
+
+  #[test]
+  fn pooled_client_partial_eq_different_arc() {
+    let a = PooledClient(Arc::new(Client::new()));
+    let b = PooledClient(Arc::new(Client::new()));
+    assert_ne!(a, b);
+  }
+
+  #[tokio::test]
+  async fn json_schema_error_bad_json_returns_json_variant() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+      .and(path("/badjson"))
+      .respond_with(ResponseTemplate::new(200).set_body_string("not json at all"))
+      .mount(&server)
+      .await;
+
+    let url = format!("{}/badjson", server.uri());
+    let sch = Arc::new(schema::i64::<()>());
+    let env = service_env::<ReqwestClientKey, _>(Client::new());
+    let err = run_async(json_schema(sch, move |c| c.get(url)), env)
+      .await
+      .expect_err("should fail");
+    assert!(matches!(err, JsonSchemaError::Json(_)));
+  }
 }
