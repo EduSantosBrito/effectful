@@ -641,7 +641,9 @@ bad = [1, 2]
   fn config_number_scalar() {
     let p = MapConfigProvider::from_pairs([("PI", "3.14")]);
     let v = config::number(&p, "PI").unwrap();
-    assert!((v - 3.14).abs() < f64::EPSILON);
+    #[allow(clippy::approx_constant)]
+    let expected = 3.14_f64;
+    assert!((v - expected).abs() < f64::EPSILON);
   }
 
   // ── config::integer ───────────────────────────────────────────────────────

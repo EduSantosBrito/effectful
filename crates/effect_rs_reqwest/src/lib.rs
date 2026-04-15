@@ -551,9 +551,7 @@ mod tests {
     let env = service_env::<ReqwestClientKey, _>(Client::new());
     let body = run_async(
       get::<Response, Error, _>(url).flat_map(|resp: Response| {
-        effect_rs::from_async(
-          move |_r: &mut _| async move { resp.text().await.map_err(|e| e.into()) },
-        )
+        effect_rs::from_async(move |_r: &mut _| async move { resp.text().await })
       }),
       env,
     )
@@ -575,9 +573,7 @@ mod tests {
     let env = service_env::<ReqwestClientKey, _>(Client::new());
     let body = run_async(
       post::<Response, Error, _>(url).flat_map(|resp: Response| {
-        effect_rs::from_async(
-          move |_r: &mut _| async move { resp.text().await.map_err(|e| e.into()) },
-        )
+        effect_rs::from_async(move |_r: &mut _| async move { resp.text().await })
       }),
       env,
     )
@@ -599,9 +595,7 @@ mod tests {
     let env = service_env::<ReqwestClientKey, _>(Client::new());
     let body = run_async(
       put::<Response, Error, _>(url).flat_map(|resp: Response| {
-        effect_rs::from_async(
-          move |_r: &mut _| async move { resp.text().await.map_err(|e| e.into()) },
-        )
+        effect_rs::from_async(move |_r: &mut _| async move { resp.text().await })
       }),
       env,
     )
@@ -640,9 +634,7 @@ mod tests {
     let env = service_env::<ReqwestClientKey, _>(Client::new());
     let body = run_async(
       patch::<Response, Error, _>(url).flat_map(|resp: Response| {
-        effect_rs::from_async(
-          move |_r: &mut _| async move { resp.text().await.map_err(|e| e.into()) },
-        )
+        effect_rs::from_async(move |_r: &mut _| async move { resp.text().await })
       }),
       env,
     )

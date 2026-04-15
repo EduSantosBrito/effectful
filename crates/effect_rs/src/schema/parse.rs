@@ -1343,9 +1343,12 @@ mod tests {
 
     #[test]
     fn unknown_f64_variant_accessible() {
+      #[allow(clippy::approx_constant)]
       let u = Unknown::F64(3.14);
       if let Unknown::F64(v) = u {
-        assert!((v - 3.14).abs() < 1e-9);
+        #[allow(clippy::approx_constant)]
+        let expected = 3.14_f64;
+        assert!((v - expected).abs() < 1e-9);
       } else {
         panic!("not F64");
       }
