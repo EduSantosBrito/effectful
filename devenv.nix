@@ -57,9 +57,6 @@ in {
 
   packages = with pkgs; [
     cachix
-    clippy
-    rust-analyzer
-    rustc
     perl
     direnv
     prek
@@ -79,12 +76,12 @@ in {
     beautysh
     biome
     deadnix
-    rustfmt
     taplo
     treefmt
     vulnix
     yamlfmt
     mdbook
+    ast-grep
   ];
 
   env = {
@@ -96,12 +93,17 @@ in {
 
   languages.rust = {
     enable = true;
-    channel = "stable";
+    # Nightly + rustc-dev allows the effect_rs_lint Dylint crate to access
+    # rustc internals (rustc_private).  The Dylint crate carries no
+    # rust-toolchain pin so it always uses whatever nightly devenv provides.
+    channel = "nightly";
     components = [
       "cargo"
       "clippy"
       "rust-analyzer"
       "rustc"
+      "rustc-dev"
+      "rust-src"
       "rustfmt"
       "llvm-tools"
     ];

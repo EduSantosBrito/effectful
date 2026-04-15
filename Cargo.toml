@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = [".tmp", "tmp"]
+exclude = [".tmp", "tmp", "crates/effect_rs_lint"]
 members = [
   "crates/effect_rs",
   "crates/effect_rs_axum",

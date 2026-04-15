@@ -1,0 +1,97 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# D-01  run_blocking / run_async only at program entry points
+# ──────────────────────────────────────────────────────────────────────────────
+- id: effect-rs-run-blocking-only-at-edge
+  language: Rust
+  severity: error
+  message: |
+    `run_blocking(…)` / `run_async(…)` must only be called from binary entry
+    points (`main`, integration tests) — never from library functions.
+  note: |
+    BAD:  pub fn execute(e: Effect<…>) -> R { run_blocking(rt, e, env) }
+    GOOD: // In main.rs or integration test:
+          fn main() { run_blocking(rt, my_effect(), env.build()) }
+  rule:
+    all:
+      - any:
+          - pattern: run_blocking($$$)
+          - pattern: run_async($$$)
+      # Inside a function that is NOT main and NOT a test
+      - inside:
+          kind: function_item
+          stopBy: end
+      - not:
+          inside:
+            has:
+              kind: attribute_item
+              pattern: "#[test]"
+            stopBy: parent
+      - not:
+          inside:
+            has:
+              kind: attribute_item
+              pattern: "#[tokio::test]"
+            stopBy: parent
+      - not:
+          inside:
+            kind: function_item
+            has:
+              kind: identifier
+              regex: "^main$"
+              field: name
+# ──────────────────────────────────────────────────────────────────────────────
+# D-02  Tests must use run_test, not run_blocking
+# ──────────────────────────────────────────────────────────────────────────────
+- id: effect-rs-tests-must-use-run-test
+  language: Rust
+  severity: error
+  message: |
+    Test functions must use `run_test(…)` or `run_test_with_env(…)`, not `run_blocking`.
+    `run_test` enables fiber-leak detection and structured error reporting.
+  note: |
+    BAD:  #[test] fn my_test() { run_blocking(rt, my_effect(), env) }
+    GOOD: #[test] fn my_test() {
+              assert!(matches!(run_test(my_effect()), Exit::Success(_)));
+          }
+  rule:
+    all:
+      - pattern: run_blocking($$$)
+      - inside:
+          kind: function_item
+          has:
+            kind: attribute_item
+            any:
+              - pattern: "#[test]"
+              - pattern: "#[tokio::test]"
+            stopBy: parent
+# ──────────────────────────────────────────────────────────────────────────────
+# D-03  No tokio::spawn
+# ──────────────────────────────────────────────────────────────────────────────
+- id: effect-rs-no-tokio-spawn
+  language: Rust
+  severity: error
+  message: |
+    `tokio::spawn(…)` bypasses Effect's structured concurrency.
+    Use `run_fork` / `.fork()` to create tracked fibers.
+  note: |
+    BAD:  tokio::spawn(async move { my_effect.run().await });
+    GOOD: let handle = my_effect.fork();
+          // later: handle.join()
+  rule:
+    pattern: tokio::spawn($$$)
+# ──────────────────────────────────────────────────────────────────────────────
+# D-04  No std::thread::spawn
+# ──────────────────────────────────────────────────────────────────────────────
+- id: effect-rs-no-thread-spawn
+  language: Rust
+  severity: error
+  message: |
+    `std::thread::spawn` bypasses Effect's fiber model.
+    Use `run_fork` / `FiberHandle` for structured concurrency.
+  note: |
+    BAD:  thread::spawn(|| { … });
+    GOOD: let handle = my_effect.fork();
+  rule:
+    any:
+      - pattern: thread::spawn($$$)
+      - pattern: std::thread::spawn($$$)

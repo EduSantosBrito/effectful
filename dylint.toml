@@ -1,0 +1,2 @@
+[workspace.metadata.dylint]
+libraries = [{ path = "crates/effect_rs_lint" }]
