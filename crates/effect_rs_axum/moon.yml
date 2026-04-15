@@ -3,7 +3,7 @@ language: 'rust'
 layer: 'library'
 tasks:
   check:
-    deps: ['effect:format', '^:check']
+    deps: ['effect:ci-format', '^:check']
     command:
       - cargo
       - check

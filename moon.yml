@@ -26,9 +26,10 @@ tasks:
       cache: false
       outputStyle: buffer-only-failure
   ci-format:
-    description: 'Format check for CI (treefmt with fail-on-change)'
+    description: >-
+      Repo-wide format *check* (treefmt CI mode + fail-on-change). Cached so :check/:test can cache-hit; use :format to actually write formatted files.
     command: 'treefmt'
-    args: ['--config-file', 'treefmt.ci.toml']
+    args: ['--ci', '--config-file', 'treefmt.ci.toml']
     inputs:
       - 'treefmt.ci.toml'
       - '**/*.rs'
@@ -39,11 +40,11 @@ tasks:
       - '**/*.toml'
       - '.github/workflows/*.yml'
     options:
-      cache: false
+      cache: true
       outputStyle: buffer-only-failure
   clippy:
-    description: 'Gate after format: member crates have run clippy (anchor for workspace lint ~:clippy)'
-    deps: ['~:format', '^:clippy']
+    description: 'Gate after ci-format: member crates have run clippy (anchor for workspace lint ~:clippy)'
+    deps: ['~:ci-format', '^:clippy']
     command: 'bash'
     args: ['-c', ':']
     options:
@@ -73,7 +74,7 @@ tasks:
       - '95'
       - '--fail-under-functions'
       - '95'
-    deps: ['~:format']
+    deps: ['~:ci-format']
     inputs:
       - 'Cargo.toml'
       - 'Cargo.lock'
