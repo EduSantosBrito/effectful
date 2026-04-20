@@ -5,7 +5,10 @@
 
 use core::convert::Infallible;
 
-use crate::kernel::{BoxFuture, Effect};
+use crate::kernel::{
+  BoxFuture, Effect,
+  effect::{SyncStep, start_async_operation, start_effect, start_static_async_operation},
+};
 
 /// Effect.ts-style uninhabited error marker for infallible runtime operations.
 pub type Never = Infallible;
@@ -16,16 +19,19 @@ pub type Never = Infallible;
 /// `Poll::Pending`, this implementation calls `std::thread::yield_now` and polls again — there is
 /// no real async driver, so effects that genuinely need to await I/O or other wakeups may spin or
 /// stall. For those cases use [`run_async`] (or an executor) instead.
-#[inline]
+#[inline(always)]
 pub fn run_blocking<A, E, R>(effect: Effect<A, E, R>, mut env: R) -> Result<A, E>
 where
   A: 'static,
   E: 'static,
   R: 'static,
 {
-  // `Effect::run` already returns `Pin<Box<dyn Future>>`; poll it directly — do not `Box::pin`
-  // again (that would allocate a second box around the first).
-  let mut fut: BoxFuture<'_, Result<A, E>> = effect.run(&mut env);
+  let mut fut: BoxFuture<'_, Result<A, E>> =
+    match start_effect(effect, &mut env) {
+      SyncStep::Ready(output) => return output,
+      SyncStep::AsyncBorrow(f) => start_async_operation(f, &mut env),
+      SyncStep::AsyncStatic(f) => start_static_async_operation(f, &mut env),
+    };
   let waker = std::task::Waker::noop();
   let mut cx = std::task::Context::from_waker(waker);
   loop {
@@ -37,14 +43,18 @@ where
 }
 
 /// Run an effect to completion using the async executor (`.await` on [`Effect::run`]).
-#[inline]
+#[inline(always)]
 pub async fn run_async<A, E, R>(effect: Effect<A, E, R>, mut env: R) -> Result<A, E>
 where
   A: 'static,
   E: 'static,
   R: 'static,
 {
-  effect.run(&mut env).await
+  match start_effect(effect, &mut env) {
+    SyncStep::Ready(output) => output,
+    SyncStep::AsyncBorrow(f) => start_async_operation(f, &mut env).await,
+    SyncStep::AsyncStatic(f) => start_static_async_operation(f, &mut env).await,
+  }
 }
 
 #[cfg(test)]
@@ -69,6 +79,15 @@ mod tests {
     }
 
     #[test]
+    fn completes_sync_only_chain_with_multiple_combinators() {
+      let eff = crate::kernel::succeed::<u8, &'static str, ()>(3)
+        .flat_map(|n| crate::kernel::succeed(n + 1))
+        .and_then_discard(crate::kernel::succeed::<u8, &'static str, ()>(9))
+        .map(|n| n * 2);
+      assert_eq!(run_blocking(eff, ()), Ok(8));
+    }
+
+    #[test]
     fn with_failure_effect_returns_err_value() {
       let result = run_blocking(crate::kernel::fail::<u8, &str, ()>("boom"), ());
       assert_eq!(result, Err("boom"));
@@ -82,6 +101,18 @@ mod tests {
     fn with_success_effect_returns_ok_value() {
       let async_out = pollster::block_on(run_async(succeed::<u8, (), ()>(11), ()));
       assert_eq!(async_out, Ok(11));
+    }
+
+    #[test]
+    fn completes_sync_prefix_then_async_boundary_then_sync_tail() {
+      let eff = crate::kernel::succeed::<u8, &'static str, ()>(1)
+        .flat_map(|n| {
+          crate::kernel::from_async(move |_r| async move { Ok::<u8, &'static str>(n + 1) })
+        })
+        .and_then_discard(crate::kernel::succeed::<u8, &'static str, ()>(99))
+        .map(|n| n + 1);
+      let async_out = pollster::block_on(run_async(eff, ()));
+      assert_eq!(async_out, Ok(3));
     }
   }
 }

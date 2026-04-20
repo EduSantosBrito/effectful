@@ -115,6 +115,7 @@ impl Runtime for TokioRuntime {
     handle
   }
 
+  #[inline(always)]
   fn sleep(&self, duration: Duration) -> Effect<(), Never, ()> {
     from_async(move |_env| async move {
       tokio::time::sleep(duration).await;
@@ -127,6 +128,7 @@ impl Runtime for TokioRuntime {
     instant_now_blocking()
   }
 
+  #[inline(always)]
   fn yield_now(&self) -> Effect<(), Never, ()> {
     from_async(move |_env| async move {
       tokio::task::yield_now().await;

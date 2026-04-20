@@ -65,8 +65,9 @@ use crate::runtime::Never;
 /// machine, so the current shape keeps **one** allocation for the async body.
 ///
 /// For **bind-free** bodies, [`effect!`](macro@crate::effect) uses [`Effect::new`] instead,
-/// which stores the sync closure in `SyncOnce` and boxes only a trivial [`core::future::ready`]
-/// future on `run` — no user `async` block and no `new_async` indirection.
+/// which keeps the work in the internal sync node and boxes only a trivial
+/// [`core::future::ready`] future on [`Effect::run`]. [`crate::runtime::run_blocking`] and
+/// [`crate::runtime::run_async`] short-circuit that sync node directly.
 ///
 /// The boxed future is **`dyn Future`** (not `Send`) so [`crate::streaming::stream::Stream`] and other `Rc`-based code can use
 /// [`Effect`]; prefer [`crate::runtime::run_blocking`] or a single-threaded async runtime when driving
@@ -74,13 +75,121 @@ use crate::runtime::Never;
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 /// Heap-pin a future as [`BoxFuture`] (single allocation; coerces to `dyn Future`).
-#[inline]
+#[inline(always)]
 pub fn box_future<'a, Fut>(fut: Fut) -> BoxFuture<'a, Fut::Output>
 where
   Fut: Future + 'a,
   Fut::Output: 'a,
 {
   Box::pin(fut)
+}
+
+#[inline(always)]
+fn map_result_future<'a, A, E, B, E2, G>(
+  mut fut: BoxFuture<'a, Result<A, E>>,
+  g: G,
+) -> BoxFuture<'a, Result<B, E2>>
+where
+  A: 'a,
+  E: 'a,
+  B: 'a,
+  E2: 'a,
+  G: FnOnce(Result<A, E>) -> Result<B, E2> + 'a,
+{
+  let mut g = Some(g);
+  box_future(core::future::poll_fn(move |cx| {
+    match fut.as_mut().poll(cx) {
+      core::task::Poll::Ready(output) => {
+        let g = match g.take() {
+          Some(g) => g,
+          None => panic!("mapped future polled after completion"),
+        };
+        core::task::Poll::Ready(g(output))
+      }
+      core::task::Poll::Pending => core::task::Poll::Pending,
+    }
+  }))
+}
+
+#[inline(always)]
+fn static_future<'a, T>(fut: BoxFuture<'static, T>) -> BoxFuture<'a, T>
+where
+  T: 'a,
+{
+  fut
+}
+
+#[inline(always)]
+fn flat_map_static_future<'a, A, B, E, R, H>(
+  fut: BoxFuture<'static, Result<A, E>>,
+  r: &'a mut R,
+  h: H,
+) -> BoxFuture<'a, Result<B, E>>
+where
+  A: 'a,
+  B: 'static,
+  E: 'static,
+  R: 'static,
+  H: FnOnce(A) -> Effect<B, E, R> + 'a,
+{
+  enum State<'a, A, B, E, R, H>
+  where
+    B: 'static,
+    E: 'static,
+    R: 'static,
+    H: FnOnce(A) -> Effect<B, E, R> + 'a,
+  {
+    First {
+      fut: BoxFuture<'static, Result<A, E>>,
+      r: Option<&'a mut R>,
+      h: Option<H>,
+    },
+    Second {
+      fut: BoxFuture<'a, Result<B, E>>,
+    },
+    Done,
+  }
+
+  let mut state = State::First {
+    fut,
+    r: Some(r),
+    h: Some(h),
+  };
+
+  box_future(core::future::poll_fn(move |cx| {
+    loop {
+      state = match core::mem::replace(&mut state, State::Done) {
+        State::First { mut fut, mut r, h } => match fut.as_mut().poll(cx) {
+          core::task::Poll::Pending => State::First { fut, r, h },
+          core::task::Poll::Ready(Err(e)) => return core::task::Poll::Ready(Err(e)),
+          core::task::Poll::Ready(Ok(a)) => {
+            let h = match h {
+              Some(h) => h,
+              None => panic!("flat_map continuation missing"),
+            };
+            let r = match r.take() {
+              Some(r) => r,
+              None => panic!("flat_map future lost environment"),
+            };
+            match start_effect(h(a), r) {
+              SyncStep::Ready(output) => return core::task::Poll::Ready(output),
+              SyncStep::AsyncBorrow(next) => State::Second {
+                fut: start_async_operation(next, r),
+              },
+              SyncStep::AsyncStatic(next) => State::Second {
+                fut: static_future(start_static_async_operation(next, r)),
+              },
+            }
+          }
+        },
+        State::Second { mut fut } => match fut.as_mut().poll(cx) {
+          core::task::Poll::Pending => State::Second { fut },
+          core::task::Poll::Ready(output) => return core::task::Poll::Ready(output),
+        },
+        State::Done => panic!("flat_map static future polled after completion"),
+      };
+    }
+  }))
 }
 
 // ── IntoBind ────────────────────────────────────────────────────────────────
@@ -132,54 +241,125 @@ pub fn into_bind<'a, R, A, E, T: IntoBind<'a, R, A, E>>(
 
 // ── EffectOp (Internal) ─────────────────────────────────────────────────────
 
-trait EffectOp<A, E, R>
+type SyncOp<A, E, R> = Box<dyn FnOnce(&mut R) -> SyncStep<A, E, R>>;
+type AsyncBorrowOp<A, E, R> = Box<dyn for<'a> FnOnce(&'a mut R) -> BoxFuture<'a, Result<A, E>>>;
+type AsyncStaticOp<A, E, R> = Box<dyn FnOnce(&mut R) -> BoxFuture<'static, Result<A, E>>>;
+
+pub(crate) enum SyncStep<A, E, R>
+where
+  A: 'static,
+  E: 'static,
+{
+  Ready(Result<A, E>),
+  AsyncBorrow(AsyncBorrowOp<A, E, R>),
+  AsyncStatic(AsyncStaticOp<A, E, R>),
+}
+
+pub(crate) enum EffectOp<A, E, R>
 where
   A: 'static,
   E: 'static,
   R: 'static,
 {
-  fn run_boxed<'a>(self: Box<Self>, r: &'a mut R) -> BoxFuture<'a, Result<A, E>>;
+  Sync(SyncOp<A, E, R>),
+  AsyncBorrow(AsyncBorrowOp<A, E, R>),
+  AsyncStatic(AsyncStaticOp<A, E, R>),
 }
 
-struct SyncOnce<F> {
-  f: Option<F>,
-}
-
-impl<A, E, R, F> EffectOp<A, E, R> for SyncOnce<F>
+trait ProgramOp<A, E, R>
 where
   A: 'static,
   E: 'static,
   R: 'static,
-  F: FnOnce(&mut R) -> Result<A, E> + 'static,
 {
-  #[inline]
-  fn run_boxed<'a>(mut self: Box<Self>, r: &'a mut R) -> BoxFuture<'a, Result<A, E>> {
-    let f = self
-      .f
-      .take()
-      .expect("Effect::run invoked twice (internal bug)");
-    box_future(ready(f(r)))
+  fn start(self: Box<Self>, r: &mut R) -> SyncStep<A, E, R>;
+}
+
+enum EffectRepr<A, E, R>
+where
+  A: 'static,
+  E: 'static,
+  R: 'static,
+{
+  Leaf(EffectOp<A, E, R>),
+  Program(Box<dyn ProgramOp<A, E, R>>),
+}
+
+#[inline(always)]
+fn ready_step<A, E, R>(output: Result<A, E>) -> SyncStep<A, E, R>
+where
+  A: 'static,
+  E: 'static,
+{
+  SyncStep::Ready(output)
+}
+
+#[inline(always)]
+pub(crate) fn start_async_operation<'a, A, E, R>(
+  op: AsyncBorrowOp<A, E, R>,
+  r: &'a mut R,
+) -> BoxFuture<'a, Result<A, E>>
+where
+  A: 'static,
+  E: 'static,
+  R: 'static,
+{
+  op(r)
+}
+
+#[inline(always)]
+pub(crate) fn start_static_async_operation<A, E, R>(
+  op: AsyncStaticOp<A, E, R>,
+  r: &mut R,
+) -> BoxFuture<'static, Result<A, E>>
+where
+  A: 'static,
+  E: 'static,
+  R: 'static,
+{
+  op(r)
+}
+
+#[inline(always)]
+pub(crate) fn start_operation<A, E, R>(op: EffectOp<A, E, R>, r: &mut R) -> SyncStep<A, E, R>
+where
+  A: 'static,
+  E: 'static,
+  R: 'static,
+{
+  match op {
+    EffectOp::Sync(f) => f(r),
+    EffectOp::AsyncBorrow(f) => SyncStep::AsyncBorrow(f),
+    EffectOp::AsyncStatic(f) => SyncStep::AsyncStatic(f),
   }
 }
 
-struct Once<F> {
-  f: Option<F>,
-}
-
-impl<A, E, R, F> EffectOp<A, E, R> for Once<F>
+#[inline(always)]
+pub(crate) fn start_effect<A, E, R>(effect: Effect<A, E, R>, r: &mut R) -> SyncStep<A, E, R>
 where
   A: 'static,
   E: 'static,
   R: 'static,
-  F: for<'a> FnOnce(&'a mut R) -> BoxFuture<'a, Result<A, E>> + 'static,
 {
-  #[inline]
-  fn run_boxed<'a>(mut self: Box<Self>, r: &'a mut R) -> BoxFuture<'a, Result<A, E>> {
-    let f = self
-      .f
-      .take()
-      .expect("Effect::run invoked twice (internal bug)");
-    f(r)
+  match effect.repr {
+    EffectRepr::Leaf(op) => start_operation(op, r),
+    EffectRepr::Program(program) => program.start(r),
+  }
+}
+
+#[inline(always)]
+fn run_effect_async<A, E, R>(effect: Effect<A, E, R>, r: &mut R) -> impl Future<Output = Result<A, E>> + '_
+where
+  A: 'static,
+  E: 'static,
+  R: 'static,
+{
+  async move {
+    match start_effect(effect, r) {
+      SyncStep::Ready(output) => output,
+      SyncStep::AsyncBorrow(f) => start_async_operation(f, r).await,
+      SyncStep::AsyncStatic(f) => start_static_async_operation(f, r).await,
+    }
   }
 }
 
@@ -213,7 +393,7 @@ where
   E: 'static,
   R: 'static,
 {
-  op: Box<dyn EffectOp<A, E, R>>,
+  repr: EffectRepr<A, E, R>,
   _pd: PhantomData<fn() -> (A, E, R)>,
 }
 
@@ -223,6 +403,17 @@ where
   E: 'static,
   R: 'static,
 {
+  #[inline]
+  fn new_step<F>(f: F) -> Self
+  where
+    F: FnOnce(&mut R) -> SyncStep<A, E, R> + 'static,
+  {
+    Self {
+      repr: EffectRepr::Leaf(EffectOp::Sync(Box::new(f))),
+      _pd: PhantomData,
+    }
+  }
+
   // ── Constructors ──────────────────────────────────────────────────────
 
   /// Create an effect from a synchronous computation.
@@ -233,10 +424,7 @@ where
   where
     F: FnOnce(&mut R) -> Result<A, E> + 'static,
   {
-    Self {
-      op: Box::new(SyncOnce { f: Some(f) }),
-      _pd: PhantomData,
-    }
+    Self::new_step(move |r| ready_step(f(r)))
   }
 
   /// Create an effect from an asynchronous computation.
@@ -248,7 +436,29 @@ where
     F: for<'a> FnOnce(&'a mut R) -> BoxFuture<'a, Result<A, E>> + 'static,
   {
     Self {
-      op: Box::new(Once { f: Some(f) }),
+      repr: EffectRepr::Leaf(EffectOp::AsyncBorrow(Box::new(f))),
+      _pd: PhantomData,
+    }
+  }
+
+  #[inline]
+  fn new_static_async<F>(f: F) -> Self
+  where
+    F: FnOnce(&mut R) -> BoxFuture<'static, Result<A, E>> + 'static,
+  {
+    Self {
+      repr: EffectRepr::Leaf(EffectOp::AsyncStatic(Box::new(f))),
+      _pd: PhantomData,
+    }
+  }
+
+  #[inline]
+  fn new_program<P>(program: P) -> Self
+  where
+    P: ProgramOp<A, E, R> + 'static,
+  {
+    Self {
+      repr: EffectRepr::Program(Box::new(program)),
       _pd: PhantomData,
     }
   }
@@ -260,7 +470,19 @@ where
   /// Consumes the effect (each effect runs at most once).
   #[inline]
   pub fn run<'a>(self, r: &'a mut R) -> BoxFuture<'a, Result<A, E>> {
-    self.op.run_boxed(r)
+    match start_effect(self, r) {
+      SyncStep::Ready(output) => box_future(ready(output)),
+      SyncStep::AsyncBorrow(f) => start_async_operation(f, r),
+      SyncStep::AsyncStatic(f) => static_future(start_static_async_operation(f, r)),
+    }
+  }
+
+  #[inline]
+  fn from_repr(repr: EffectRepr<A, E, R>) -> Self {
+    Self {
+      repr,
+      _pd: PhantomData,
+    }
   }
 
   // ── Functor Operations ────────────────────────────────────────────────
@@ -275,12 +497,18 @@ where
     B: 'static,
     G: FnOnce(A) -> B + 'static,
   {
-    Effect::new_async(move |r| {
-      box_future(async move {
-        let a = self.run(r).await?;
-        Ok(g(a))
-      })
-    })
+    match self.repr {
+      EffectRepr::Leaf(EffectOp::AsyncBorrow(f)) => Effect::new_async(move |r| {
+        map_result_future(start_async_operation(f, r), move |output| output.map(g))
+      }),
+      EffectRepr::Leaf(EffectOp::AsyncStatic(f)) => Effect::new_static_async(move |r| {
+        map_result_future(start_static_async_operation(f, r), move |output| output.map(g))
+      }),
+      repr => Effect::new_program(MapProgram {
+        source: Effect::from_repr(repr),
+        f: g,
+      }),
+    }
   }
 
   /// Replace the success value with a constant.
@@ -307,12 +535,22 @@ where
     B: 'static,
     H: FnOnce(A) -> Effect<B, E, R> + 'static,
   {
-    Effect::new_async(move |r| {
-      box_future(async move {
-        let a = self.run(r).await?;
-        h(a).run(r).await
-      })
-    })
+    match self.repr {
+      EffectRepr::Leaf(EffectOp::AsyncBorrow(f)) => Effect::new_async(move |r| {
+        box_future(async move {
+          let a = start_async_operation(f, r).await?;
+          run_effect_async(h(a), r).await
+        })
+      }),
+      EffectRepr::Leaf(EffectOp::AsyncStatic(f)) => Effect::new_async(move |r| {
+        let fut = start_static_async_operation(f, r);
+        flat_map_static_future(fut, r, h)
+      }),
+      repr => Effect::new_program(FlatMapProgram {
+        source: Effect::from_repr(repr),
+        f: h,
+      }),
+    }
   }
 
   /// Sequence two effects, discarding the first result.
@@ -336,7 +574,38 @@ where
     E2: 'static,
     H: FnOnce(E) -> E2 + 'static,
   {
-    Effect::new_async(move |r| box_future(async move { self.run(r).await.map_err(h) }))
+    match self.repr {
+      EffectRepr::Leaf(op) => match op {
+        EffectOp::Sync(f) => Effect::new_step(move |r| match f(r) {
+          SyncStep::Ready(Ok(a)) => ready_step(Ok(a)),
+          SyncStep::Ready(Err(e)) => ready_step(Err(h(e))),
+          SyncStep::AsyncBorrow(next) => SyncStep::AsyncBorrow(Box::new(move |r| {
+            map_result_future(start_async_operation(next, r), move |output| {
+              output.map_err(h)
+            })
+          })),
+          SyncStep::AsyncStatic(next) => SyncStep::AsyncStatic(Box::new(move |r| {
+            map_result_future(start_static_async_operation(next, r), move |output| {
+              output.map_err(h)
+            })
+          })),
+        }),
+        EffectOp::AsyncBorrow(f) => Effect::new_async(move |r| {
+          map_result_future(start_async_operation(f, r), move |output| output.map_err(h))
+        }),
+        EffectOp::AsyncStatic(f) => Effect::new_static_async(move |r| {
+          map_result_future(start_static_async_operation(f, r), move |output| {
+            output.map_err(h)
+          })
+        }),
+      },
+      repr => {
+        let source = Effect::from_repr(repr);
+        Effect::new_async(move |r| {
+          map_result_future(source.run(r), move |output| output.map_err(h))
+        })
+      }
+    }
   }
 
   /// Recover from failure by running another effect.
@@ -551,6 +820,80 @@ where
   }
 }
 
+struct MapProgram<A, B, E, R, G>
+where
+  A: 'static,
+  B: 'static,
+  E: 'static,
+  R: 'static,
+  G: FnOnce(A) -> B + 'static,
+{
+  source: Effect<A, E, R>,
+  f: G,
+}
+
+impl<A, B, E, R, G> ProgramOp<B, E, R> for MapProgram<A, B, E, R, G>
+where
+  A: 'static,
+  B: 'static,
+  E: 'static,
+  R: 'static,
+  G: FnOnce(A) -> B + 'static,
+{
+  fn start(self: Box<Self>, r: &mut R) -> SyncStep<B, E, R> {
+    let Self { source, f } = *self;
+    match start_effect(source, r) {
+      SyncStep::Ready(Ok(a)) => ready_step(Ok(f(a))),
+      SyncStep::Ready(Err(e)) => ready_step(Err(e)),
+      SyncStep::AsyncBorrow(next) => SyncStep::AsyncBorrow(Box::new(move |r| {
+        map_result_future(start_async_operation(next, r), move |output| output.map(f))
+      })),
+      SyncStep::AsyncStatic(next) => SyncStep::AsyncStatic(Box::new(move |r| {
+        map_result_future(start_static_async_operation(next, r), move |output| output.map(f))
+      })),
+    }
+  }
+}
+
+struct FlatMapProgram<A, B, E, R, H>
+where
+  A: 'static,
+  B: 'static,
+  E: 'static,
+  R: 'static,
+  H: FnOnce(A) -> Effect<B, E, R> + 'static,
+{
+  source: Effect<A, E, R>,
+  f: H,
+}
+
+impl<A, B, E, R, H> ProgramOp<B, E, R> for FlatMapProgram<A, B, E, R, H>
+where
+  A: 'static,
+  B: 'static,
+  E: 'static,
+  R: 'static,
+  H: FnOnce(A) -> Effect<B, E, R> + 'static,
+{
+  fn start(self: Box<Self>, r: &mut R) -> SyncStep<B, E, R> {
+    let Self { source, f } = *self;
+    match start_effect(source, r) {
+      SyncStep::Ready(Ok(a)) => start_effect(f(a), r),
+      SyncStep::Ready(Err(e)) => ready_step(Err(e)),
+      SyncStep::AsyncBorrow(next) => SyncStep::AsyncBorrow(Box::new(move |r| {
+        box_future(async move {
+          let a = start_async_operation(next, r).await?;
+          run_effect_async(f(a), r).await
+        })
+      })),
+      SyncStep::AsyncStatic(next) => SyncStep::AsyncBorrow(Box::new(move |r| {
+        let fut = start_static_async_operation(next, r);
+        flat_map_static_future(fut, r, f)
+      })),
+    }
+  }
+}
+
 // ── Context-aware Effect methods ────────────────────────────────────────────
 
 impl<A, E, K: ?Sized, V, Tail>
@@ -603,7 +946,7 @@ where
 ///
 /// The returned future must be `'static` (cannot borrow `&mut R`).
 /// For futures that borrow the environment, use [`Effect::new_async`].
-#[inline]
+#[inline(always)]
 pub fn from_async<A, E, R, F, Fut>(f: F) -> Effect<A, E, R>
 where
   A: 'static,
@@ -612,7 +955,7 @@ where
   F: for<'a> FnOnce(&'a mut R) -> Fut + 'static,
   Fut: Future<Output = Result<A, E>> + 'static,
 {
-  Effect::new_async(move |r| box_future(f(r)))
+  Effect::new_static_async(move |r| box_future(f(r)))
 }
 
 /// Effect that succeeds immediately with `value`.
@@ -848,6 +1191,15 @@ mod tests {
       let eff: Effect<i32, &str, ()> = succeed(42);
       assert_eq!(run(eff.void(), ()), Ok(()));
     }
+
+    #[test]
+    fn long_sync_map_chain_preserves_result() {
+      let mut eff: Effect<u64, &str, ()> = succeed(1);
+      for _ in 0..32 {
+        eff = eff.map(|n| n + 1);
+      }
+      assert_eq!(run(eff, ()), Ok(33));
+    }
   }
 
   mod monad_operations {
@@ -886,6 +1238,16 @@ mod tests {
       let eff1: Effect<i32, &str, ()> = succeed(1);
       let eff2: Effect<&str, &str, ()> = succeed("second");
       assert_eq!(run(eff1.and_then_discard(eff2), ()), Ok(1));
+    }
+
+    #[test]
+    fn mixed_sync_and_static_async_chain_resumes_correctly() {
+      let eff = succeed::<u64, &'static str, ()>(1)
+        .map(|n| n + 1)
+        .flat_map(|n| from_async(move |_r| async move { Ok::<u64, &'static str>(n + 2) }))
+        .map(|n| n * 3);
+      let out = pollster::block_on(crate::runtime::run_async(eff, ())); 
+      assert_eq!(out, Ok(12));
     }
   }
 
