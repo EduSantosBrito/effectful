@@ -2,38 +2,38 @@
 //!
 //! ## Operator
 //!
-//! `~expr` is a unary prefix "run-effect" operator — analogous to unary `-`. It expands to:
+//! `bind* expr` is a unary prefix "run-effect" operator — analogous to unary `-`. It expands to:
 //!
 //! ```text
 //! ({ use ::id_effect::IntoBindFastExt as _; (expr).__into_bind_fast(r).await? })
 //! ```
 //!
-//! `~` can appear anywhere a Rust expression can appear: in `let` bindings, conditions,
+//! `bind*` can appear anywhere a Rust expression can appear: in `let` bindings, conditions,
 //! function arguments, match arms, nested blocks, etc.
 //!
 //! ## Block structure
 //!
 //! The outermost `effect!` body is split on top-level `;` to identify statement chunks and the
-//! tail expression. `~` is expanded recursively in every chunk. The tail is wrapped in
-//! `Result::Ok(...)`. If the body contains no `~`, the proc macro uses `Effect::new` (sync
+//! tail expression. `bind*` is expanded recursively in every chunk. The tail is wrapped in
+//! `Result::Ok(...)`. If the body contains no `bind*`, the proc macro uses `Effect::new` (sync
 //! `FnOnce(&mut R) -> Result<...>`); otherwise it uses `Effect::new_async` with
 //! `Box::pin(async move { ... })` so `.await` on the hidden bind helper is valid.
 //!
-//! Nested `{ }` blocks have their `~` expanded in-place but are **not** given an additional
+//! Nested `{ }` blocks have their `bind*` expanded in-place but are **not** given an additional
 //! `Ok(tail)` wrapper — they are plain Rust blocks, not effect blocks.
 //!
-//! ## Infix bind (`ident ~ expr`)
+//! ## Infix bind (`ident bind* expr`)
 //!
-//! At the start of a statement chunk, `name ~ expr` desugars to `let name = ~expr` before
-//! prefix-`~` expansion (so Kelly-style `k ~ foo();` works).
+//! At the start of a statement chunk, `name bind* expr` desugars to `let name = bind* expr` before
+//! prefix-`bind*` expansion (so Kelly-style `k bind* foo();` works).
 //!
 //! ## Precedence and method chains
 //!
-//! `~` binds to the immediately following primary expression (the call or path up to the
+//! `bind*` binds to the immediately following primary expression (the call or path up to the
 //! next call group). Method chains that follow belong to the outer expression:
 //!
 //! ```text
-//! ~foo().bar   →   ({ use ::id_effect::IntoBindFastExt as _; (foo()).__into_bind_fast(r).await? }).bar
+//! bind* foo().bar   →   ({ use ::id_effect::IntoBindFastExt as _; (foo()).__into_bind_fast(r).await? }).bar
 //! ```
 //!
 //! ## Known limitation
@@ -44,14 +44,19 @@
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::quote;
 
-/// Returns `true` if the `effect!` body uses effect bind (`~`) anywhere (including nested groups).
+/// Returns `true` if the `effect!` body uses effect bind (`bind*`) anywhere (including nested groups).
 ///
 /// Bind-free bodies expand to `Effect::new` instead of `Effect::new_async`, avoiding an `async`
 /// state machine and `Box::pin` for the outer effect.
 pub fn effect_body_contains_bind(tokens: TokenStream) -> bool {
-  for tt in tokens {
+  let mut iter = tokens.into_iter().peekable();
+  while let Some(tt) = iter.next() {
     match tt {
-      TokenTree::Punct(p) if p.as_char() == '~' => return true,
+      TokenTree::Ident(ref i) if i == "bind" => {
+        if matches!(iter.peek(), Some(TokenTree::Punct(p)) if p.as_char() == '*') {
+          return true;
+        }
+      }
       TokenTree::Group(g) if effect_body_contains_bind(g.stream()) => return true,
       TokenTree::Group(_) => {}
       _ => {}
@@ -150,7 +155,7 @@ fn fast_bind_await(
   quote! {{ use #path::IntoBindFastExt as _; #await_expr }}
 }
 
-/// When the body tail is exactly one `~operand` (after ident-desugar), the async effect body should
+/// When the body tail is exactly one `bind* operand` (after ident-desugar), the async effect body should
 /// return the direct bind await directly. Wrapping `Ok((...await?))` triggers
 /// `clippy::needless_question_mark` (the `?` + outer `Ok` cancel for `Result` tails).
 fn try_expand_tail_as_into_bind_await(
@@ -160,18 +165,22 @@ fn try_expand_tail_as_into_bind_await(
 ) -> Option<TokenStream> {
   let mut iter = tail.into_iter().peekable();
   match iter.next()? {
-    TokenTree::Punct(p) if p.as_char() == '~' => {}
+    TokenTree::Ident(i) if i == "bind" => {}
     _ => return None,
   }
-  let operand = collect_tilde_operand(&mut iter);
+  match iter.next()? {
+    TokenTree::Punct(p) if p.as_char() == '*' => {}
+    _ => return None,
+  }
+  let operand = collect_bind_star_operand(&mut iter);
   if iter.next().is_some() {
     return None;
   }
-  let expanded_operand = expand_tilde(operand, r, path);
+  let expanded_operand = expand_bind_star(operand, r, path);
   Some(fast_bind_await(expanded_operand, r, path, false))
 }
 
-/// Split the outermost body on top-level `;`, expand `~` in each chunk, wrap tail in `Ok(...)`.
+/// Split the outermost body on top-level `;`, expand `bind*` in each chunk, wrap tail in `Ok(...)`.
 fn expand_block(body: TokenStream, r: &syn::Ident, path: &TokenStream) -> TokenStream {
   let chunks = split_semicolons(body);
   if chunks.is_empty() {
@@ -184,8 +193,8 @@ fn expand_block(body: TokenStream, r: &syn::Ident, path: &TokenStream) -> TokenS
     if chunk.is_empty() {
       continue;
     }
-    let chunk = desugar_ident_tilde_bind(chunk.clone());
-    let expanded = expand_tilde(chunk, r, path);
+    let chunk = desugar_ident_bind_star(chunk.clone());
+    let expanded = expand_bind_star(chunk, r, path);
     stmts.push(quote! { #expanded ; });
   }
 
@@ -196,14 +205,14 @@ fn expand_block(body: TokenStream, r: &syn::Ident, path: &TokenStream) -> TokenS
       ::core::result::Result::Ok(())
     }
   } else {
-    let tail = desugar_ident_tilde_bind(tail.clone());
+    let tail = desugar_ident_bind_star(tail.clone());
     if let Some(direct_tail) = try_expand_tail_as_into_bind_await(tail.clone(), r, path) {
       quote! {
         #(#stmts)*
         #direct_tail
       }
     } else {
-      let expanded_tail = expand_tilde(tail, r, path);
+      let expanded_tail = expand_bind_star(tail, r, path);
       quote! {
         #(#stmts)*
         ::core::result::Result::Ok(#expanded_tail)
@@ -212,27 +221,29 @@ fn expand_block(body: TokenStream, r: &syn::Ident, path: &TokenStream) -> TokenS
   }
 }
 
-/// `name ~ rest…` at chunk start → `let name = ~ rest…` (then [`expand_tilde`] handles `~`).
-fn desugar_ident_tilde_bind(chunk: TokenStream) -> TokenStream {
+/// `name bind* rest…` at chunk start → `let name = bind* rest…` (then [`expand_bind_star`] handles `bind*`).
+fn desugar_ident_bind_star(chunk: TokenStream) -> TokenStream {
   let v: Vec<TokenTree> = chunk.into_iter().collect();
-  if v.len() < 2 {
+  if v.len() < 3 {
     return TokenStream::from_iter(v);
   }
-  match (&v[0], &v[1]) {
-    (TokenTree::Ident(name), TokenTree::Punct(p)) if p.as_char() == '~' => {
+  match (&v[0], &v[1], &v[2]) {
+    (TokenTree::Ident(name), TokenTree::Ident(i), TokenTree::Punct(p))
+      if i == "bind" && p.as_char() == '*' =>
+    {
       let name = name.clone();
-      let rest = TokenStream::from_iter(v.into_iter().skip(2));
-      quote! { let #name = ~ #rest }
+      let rest = TokenStream::from_iter(v.into_iter().skip(3));
+      quote! { let #name = bind* #rest }
     }
     _ => TokenStream::from_iter(v),
   }
 }
 
-/// Recursively walk `tokens`, rewriting every `~primary` as a hidden fast bind await.
+/// Recursively walk `tokens`, rewriting every `bind* primary` as a hidden fast bind await.
 ///
-/// Recurses into `{ }`, `( )`, and `[ ]` groups so `~` is expanded at any nesting depth.
+/// Recurses into `{ }`, `( )`, and `[ ]` groups so `bind*` is expanded at any nesting depth.
 /// Nested groups are **not** given `Ok(tail)` wrapping — that is only for the outermost body.
-fn expand_tilde(tokens: TokenStream, r: &syn::Ident, path: &TokenStream) -> TokenStream {
+fn expand_bind_star(tokens: TokenStream, r: &syn::Ident, path: &TokenStream) -> TokenStream {
   let mut out = Vec::new();
   let mut iter = tokens.into_iter().peekable();
 
@@ -240,17 +251,22 @@ fn expand_tilde(tokens: TokenStream, r: &syn::Ident, path: &TokenStream) -> Toke
   #[allow(clippy::while_let_on_iterator)]
   while let Some(tt) = iter.next() {
     match tt {
-      TokenTree::Punct(ref p) if p.as_char() == '~' => {
-        let operand = collect_tilde_operand(&mut iter);
-        // Recurse so nested `~` inside the operand is also expanded.
-        let expanded_operand = expand_tilde(operand, r, path);
-        let bound = fast_bind_await(expanded_operand, r, path, true);
-        let group = proc_macro2::Group::new(Delimiter::Parenthesis, bound);
-        out.push(TokenTree::Group(group));
+      TokenTree::Ident(ref i) if i == "bind" => {
+        if matches!(iter.peek(), Some(TokenTree::Punct(p)) if p.as_char() == '*') {
+          iter.next(); // consume '*'
+          let operand = collect_bind_star_operand(&mut iter);
+          // Recurse so nested `bind*` inside the operand is also expanded.
+          let expanded_operand = expand_bind_star(operand, r, path);
+          let bound = fast_bind_await(expanded_operand, r, path, true);
+          let group = proc_macro2::Group::new(Delimiter::Parenthesis, bound);
+          out.push(TokenTree::Group(group));
+        } else {
+          out.push(tt);
+        }
       }
 
       TokenTree::Group(g) => {
-        let expanded_inner = expand_tilde(g.stream(), r, path);
+        let expanded_inner = expand_bind_star(g.stream(), r, path);
         let new_group = proc_macro2::Group::new(g.delimiter(), expanded_inner);
         out.push(TokenTree::Group(new_group));
       }
@@ -262,9 +278,9 @@ fn expand_tilde(tokens: TokenStream, r: &syn::Ident, path: &TokenStream) -> Toke
   TokenStream::from_iter(out)
 }
 
-/// Collect the operand of a `~` prefix operator.
+/// Collect the operand of a `bind*` prefix operator.
 ///
-/// `~` binds to the entire expression chain that follows it: idents, paths (`::`, `<...>`),
+/// `bind*` binds to the entire expression chain that follows it: idents, paths (`::`, `<...>`),
 /// call/index groups, and method chains (`.method(...)`). Collection stops only at:
 ///
 /// - `,` at depth 0 — argument separator in the surrounding call
@@ -275,10 +291,10 @@ fn expand_tilde(tokens: TokenStream, r: &syn::Ident, path: &TokenStream) -> Toke
 /// not treated as terminators.
 ///
 /// Examples (all collected as one operand, no parens needed):
-/// - `~succeed(40)` → `succeed(40)`
-/// - `~raw.parse::<i32>().map_err(|e| ...)` → `raw.parse::<i32>().map_err(|e| ...)`
-/// - `~parse_i32(s).map_error(f).catch(g)` → `parse_i32(s).map_error(f).catch(g)`
-fn collect_tilde_operand(
+/// - `bind* succeed(40)` → `succeed(40)`
+/// - `bind* raw.parse::<i32>().map_err(|e| ...)` → `raw.parse::<i32>().map_err(|e| ...)`
+/// - `bind* parse_i32(s).map_error(f).catch(g)` → `parse_i32(s).map_error(f).catch(g)`
+fn collect_bind_star_operand(
   iter: &mut std::iter::Peekable<impl Iterator<Item = TokenTree>>,
 ) -> TokenStream {
   let mut result = Vec::new();
@@ -398,27 +414,27 @@ mod tests {
   //!   (even for an empty stream), so this path is not reachable from the public expanders today.
   //! - **`n == 1`, tail empty** — e.g. empty body, or only top-level `;` / `;;` leaving final chunk empty.
   //! - **`n == 1`, tail non-empty** — single chunk, tail wrapped in `Result::Ok(tail)`.
-  //! - **`n > 1`** — statement chunks: each non-empty chunk → `desugar_ident_tilde_bind` → `expand_tilde` →
+  //! - **`n > 1`** — statement chunks: each non-empty chunk → `desugar_ident_bind_star` → `expand_bind_star` →
   //!   stmt + `;`; last chunk is tail (`Ok` or `Ok(())` if empty).
   //! - **Empty non-final chunks** — skipped (`continue`), e.g. `;;` or leading `;`.
   //!
   //! ## [`split_semicolons`] (top-level `;` only)
   //! - Split on `TokenTree::Punct` `;` **outside** any `Group`; delimiters `{ }` `( )` `[ ]` are opaque.
   //!
-  //! ## [`desugar_ident_tilde_bind`] (infix bind at chunk start)
+  //! ## [`desugar_ident_bind_star`] (infix bind at chunk start)
   //! - **`< 2` tokens** — passthrough unchanged.
-  //! - **`ident` + `~`** — rewrite to `let ident = ~ rest`.
+  //! - **`ident` + `bind*`** — rewrite to `let ident = bind* rest`.
   //! - **Else** — passthrough (not `ident~` at start).
   //!
-  //! ## [`expand_tilde`] (prefix `~` anywhere in token tree)
-  //! - **`~`** — replace with a hidden fast bind await (parenthesized group); operand from
-  //!   [`collect_tilde_operand`]; recurse into operand. The **sole** body tail `~operand` (see
+  //! ## [`expand_bind_star`] (prefix `bind*` anywhere in token tree)
+  //! - **`bind*`** — replace with a hidden fast bind await (parenthesized group); operand from
+  //!   [`collect_bind_star_operand`]; recurse into operand. The **sole** body tail `bind* operand` (see
   //!   [`try_expand_tail_as_into_bind_await`]) omits the inner `?` and outer `Ok` so the async block
   //!   returns `Result` directly (avoids `clippy::needless_question_mark`).
   //! - **`Group`** — recurse into inner stream, same delimiter.
   //! - **Other tokens** — copy through.
   //!
-  //! ## [`collect_tilde_operand`] (what binds to prefix `~`)
+  //! ## [`collect_bind_star_operand`] (what binds to prefix `bind*`)
   //! - **End of stream** — operand ends.
   //! - **`,` at `angle_depth == 0`** — stop (outer arg separator).
   //! - **`<`** — increment `angle_depth` (turbofish / generics).
@@ -440,13 +456,18 @@ mod tests {
     }};
   }
 
-  /// [`collect_tilde_operand`] expects the iterator *after* the `~` token.
-  fn operand_after_tilde_prefix(full: TokenStream) -> TokenStream {
+  /// [`collect_bind_star_operand`] expects the iterator *after* the `bind*` token.
+  fn operand_after_bind_star_prefix(full: TokenStream) -> TokenStream {
     let mut iter = full.into_iter().peekable();
     match iter.next() {
-      Some(TokenTree::Punct(p)) if p.as_char() == '~' => collect_tilde_operand(&mut iter),
-      o => panic!("expected leading `~`, got {o:?}"),
+      Some(TokenTree::Ident(i)) if i == "bind" => {}
+      o => panic!("expected leading `bind`, got {o:?}"),
     }
+    match iter.next() {
+      Some(TokenTree::Punct(p)) if p.as_char() == '*' => {}
+      o => panic!("expected `*` after `bind`, got {o:?}"),
+    }
+    collect_bind_star_operand(&mut iter)
   }
 
   fn r_custom() -> syn::Ident {
@@ -454,19 +475,19 @@ mod tests {
   }
 
   #[test]
-  fn effect_body_contains_bind_false_without_tilde() {
+  fn effect_body_contains_bind_false_without_bind_star() {
     assert!(!effect_body_contains_bind(quote! { let x = 1; x + 2 }));
   }
 
   #[test]
-  fn effect_body_contains_bind_true_with_prefix_tilde() {
-    assert!(effect_body_contains_bind(quote! { ~g() }));
+  fn effect_body_contains_bind_true_with_prefix_bind_star() {
+    assert!(effect_body_contains_bind(quote! { bind* g() }));
   }
 
   #[test]
   fn effect_body_contains_bind_true_in_nested_group() {
     assert!(effect_body_contains_bind(
-      quote! { if true { ~x() } else { 0 } }
+      quote! { if true { bind* x() } else { 0 } }
     ));
   }
 
@@ -490,8 +511,8 @@ mod tests {
       }
     }
 
-    /// Branch: `n == 1`, tail non-empty, no `~` → `Ok(tail)` only.
-    mod with_tail_having_no_tilde_operator {
+    /// Branch: `n == 1`, tail non-empty, no `bind*` → `Ok(tail)` only.
+    mod with_tail_having_no_bind_star_operator {
       use super::*;
 
       #[test]
@@ -608,14 +629,14 @@ mod tests {
       }
     }
 
-    /// Syntax: `ident ~ expr` at start of a **statement** chunk → `let` + prefix `~` expansion.
-    mod with_ident_tilde_bind_on_statement_chunk {
+    /// Syntax: `ident bind* expr` at start of a **statement** chunk → `let` + prefix `bind*` expansion.
+    mod with_ident_bind_star_bind_on_statement_chunk {
       use super::*;
 
       #[test]
       fn desugars_to_let_and_into_bind() {
         let path = quote! { ::id_effect };
-        let out = expand_bare_body(quote! { k ~ foo ( ) ; 1 }, &path);
+        let out = expand_bare_body(quote! { k bind* foo ( ) ; 1 }, &path);
         let expected = quote! {
           let k = ({ use ::id_effect::IntoBindFastExt as _; (foo()).__into_bind_fast(__effect_r).await? }) ;
           ::core::result::Result::Ok(1)
@@ -624,14 +645,14 @@ mod tests {
       }
     }
 
-    /// Syntax: `ident ~ expr` when that chunk is the **tail** — same desugar, tail wrapped in `Ok`.
-    mod with_ident_tilde_bind_on_tail_chunk {
+    /// Syntax: `ident bind* expr` when that chunk is the **tail** — same desugar, tail wrapped in `Ok`.
+    mod with_ident_bind_star_bind_on_tail_chunk {
       use super::*;
 
       #[test]
       fn desugars_and_wraps_tail_in_ok() {
         let path = quote! { ::id_effect };
-        let out = expand_bare_body(quote! { k ~ foo ( ) }, &path);
+        let out = expand_bare_body(quote! { k bind* foo ( ) }, &path);
         let expected = quote! {
           ::core::result::Result::Ok(let k = ({ use ::id_effect::IntoBindFastExt as _; (foo()).__into_bind_fast(__effect_r).await? }))
         };
@@ -639,14 +660,14 @@ mod tests {
       }
     }
 
-    /// Syntax: prefix `~` only on tail — `into_bind_fast(..., __effect_r)`.
-    mod with_prefix_tilde_on_tail_simple_call {
+    /// Syntax: prefix `bind*` only on tail — `into_bind_fast(..., __effect_r)`.
+    mod with_prefix_bind_star_on_tail_simple_call {
       use super::*;
 
       #[test]
-      fn expands_tilde_tail_to_into_bind_await_without_ok_wrap() {
+      fn expands_bind_star_tail_to_into_bind_await_without_ok_wrap() {
         let path = quote! { ::id_effect };
-        let out = expand_bare_body(quote! { ~ foo ( ) }, &path);
+        let out = expand_bare_body(quote! { bind* foo ( ) }, &path);
         let expected = quote! {
           { use ::id_effect::IntoBindFastExt as _; (foo()).__into_bind_fast(__effect_r).await }
         };
@@ -654,14 +675,14 @@ mod tests {
       }
     }
 
-    /// Syntax: `~path::segment(args)` / `~ident` — operand collection to end or group boundary.
-    mod with_prefix_tilde_path_and_call_shapes {
+    /// Syntax: `bind* path::segment(args)` / `bind* ident` — operand collection to end or group boundary.
+    mod with_prefix_bind_star_path_and_call_shapes {
       use super::*;
 
       #[test]
       fn expands_path_call() {
         let path = quote! { ::id_effect };
-        let out = expand_bare_body(quote! { ~ bar :: baz ( ) }, &path);
+        let out = expand_bare_body(quote! { bind* bar :: baz ( ) }, &path);
         let expected = quote! {
           { use ::id_effect::IntoBindFastExt as _; (bar::baz()).__into_bind_fast(__effect_r).await }
         };
@@ -671,7 +692,7 @@ mod tests {
       #[test]
       fn expands_plain_ident_operand() {
         let path = quote! { ::id_effect };
-        let out = expand_bare_body(quote! { ~ x }, &path);
+        let out = expand_bare_body(quote! { bind* x }, &path);
         let expected = quote! {
           { use ::id_effect::IntoBindFastExt as _; (x).__into_bind_fast(__effect_r).await }
         };
@@ -679,15 +700,15 @@ mod tests {
       }
     }
 
-    /// Syntax: turbofish `~expr::method::<T>()` — angle depth in [`collect_tilde_operand`].
-    mod with_prefix_tilde_turbofish_and_method_chain {
+    /// Syntax: turbofish `bind* expr::method::<T>()` — angle depth in [`collect_bind_star_operand`].
+    mod with_prefix_bind_star_turbofish_and_method_chain {
       use super::*;
 
       #[test]
       fn includes_turbofish_and_following_method_chain_in_operand() {
         let path = quote! { ::id_effect };
         let out = expand_bare_body(
-          quote! { ~ raw . parse :: < i32 > ( ) . map_err ( | e | e ) },
+          quote! { bind* raw . parse :: < i32 > ( ) . map_err ( | e | e ) },
           &path,
         );
         let expected = quote! {
@@ -698,28 +719,28 @@ mod tests {
     }
 
     /// Operand stops at outer comma inside a parenthesized group (depth-0 comma).
-    mod with_prefix_tilde_comma_terminator_at_depth_zero {
+    mod with_prefix_bind_star_comma_terminator_at_depth_zero {
       use super::*;
 
       #[test]
       fn truncates_operand_before_following_comma() {
         let path = quote! { ::id_effect };
         let r = syn::Ident::new("__effect_r", proc_macro2::Span::call_site());
-        let out = expand_tilde(quote! { ( ~ x , y ) }, &r, &path);
+        let out = expand_bind_star(quote! { ( bind* x , y ) }, &r, &path);
         let expected = quote! { (({ use ::id_effect::IntoBindFastExt as _; (x).__into_bind_fast(__effect_r).await? }), y) };
         assert_ts_eq!(out, expected);
       }
     }
 
-    /// Syntax: nested `~` inside operand (recursion in [`expand_tilde`]).
-    mod with_nested_prefix_tilde_inside_operand {
+    /// Syntax: nested `bind*` inside operand (recursion in [`expand_bind_star`]).
+    mod with_nested_prefix_bind_star_inside_operand {
       use super::*;
 
       #[test]
-      fn expands_inner_tilde_first() {
+      fn expands_inner_bind_star_first() {
         let path = quote! { ::id_effect };
         let r = syn::Ident::new("__effect_r", proc_macro2::Span::call_site());
-        let out = expand_tilde(quote! { ~ ~ foo ( ) }, &r, &path);
+        let out = expand_bind_star(quote! { bind* bind* foo ( ) }, &r, &path);
         let expected = quote! {
           ({ use ::id_effect::IntoBindFastExt as _; (({ use ::id_effect::IntoBindFastExt as _; (foo()).__into_bind_fast(__effect_r).await? })).__into_bind_fast(__effect_r).await? })
         };
@@ -727,15 +748,15 @@ mod tests {
       }
     }
 
-    /// Syntax: `~` inside nested `{ }` / `( )` / `[ ]` — expanded in place, **no** extra outer `Ok` on block.
-    mod with_prefix_tilde_inside_nested_groups {
+    /// Syntax: `bind*` inside nested `{ }` / `( )` / `[ ]` — expanded in place, **no** extra outer `Ok` on block.
+    mod with_prefix_bind_star_inside_nested_groups {
       use super::*;
 
       #[test]
       fn expands_inside_brace_group() {
         let path = quote! { ::id_effect };
         let r = syn::Ident::new("__effect_r", proc_macro2::Span::call_site());
-        let out = expand_tilde(quote! { { ~ a ( ) } }, &r, &path);
+        let out = expand_bind_star(quote! { { bind* a ( ) } }, &r, &path);
         let expected = quote! { { ({ use ::id_effect::IntoBindFastExt as _; (a()).__into_bind_fast(__effect_r).await? }) } };
         assert_ts_eq!(out, expected);
       }
@@ -744,7 +765,7 @@ mod tests {
       fn expands_inside_paren_group() {
         let path = quote! { ::id_effect };
         let r = syn::Ident::new("__effect_r", proc_macro2::Span::call_site());
-        let out = expand_tilde(quote! { ( ~ b ( ) ) }, &r, &path);
+        let out = expand_bind_star(quote! { ( bind* b ( ) ) }, &r, &path);
         let expected = quote! { (({ use ::id_effect::IntoBindFastExt as _; (b()).__into_bind_fast(__effect_r).await? })) };
         assert_ts_eq!(out, expected);
       }
@@ -753,7 +774,7 @@ mod tests {
       fn expands_inside_bracket_group() {
         let path = quote! { ::id_effect };
         let r = syn::Ident::new("__effect_r", proc_macro2::Span::call_site());
-        let out = expand_tilde(quote! { [ ~ c ( ) ] }, &r, &path);
+        let out = expand_bind_star(quote! { [ bind* c ( ) ] }, &r, &path);
         let expected = quote! { [({ use ::id_effect::IntoBindFastExt as _; (c()).__into_bind_fast(__effect_r).await? })] };
         assert_ts_eq!(out, expected);
       }
@@ -766,7 +787,7 @@ mod tests {
       #[test]
       fn uses_path_prefix_in_into_bind() {
         let path = quote! { ::my_effect };
-        let out = expand_bare_body(quote! { ~ z ( ) }, &path);
+        let out = expand_bare_body(quote! { bind* z ( ) }, &path);
         let expected = quote! {
           { use ::my_effect::IntoBindFastExt as _; (z()).__into_bind_fast(__effect_r).await }
         };
@@ -782,7 +803,7 @@ mod tests {
       #[test]
       fn does_not_match_ideal_operand_boundary() {
         let path = quote! { ::id_effect };
-        let out = expand_bare_body(quote! { ~ v :: < u8 > > ( ) }, &path);
+        let out = expand_bare_body(quote! { bind* v :: < u8 > > ( ) }, &path);
         let expected = quote! {
           ::core::result::Result::Ok(({ use ::id_effect::IntoBindFastExt as _; (v::<u8>).__into_bind_fast(__effect_r).await? }) > ())
         };
@@ -790,16 +811,16 @@ mod tests {
       }
     }
 
-    /// `if cond { ~f(); } tail` — the idiomatic Rust pattern: an `if` block used as
+    /// `if cond { bind* f(); } tail` — the idiomatic Rust pattern: an `if` block used as
     /// a statement (no trailing `;` needed) followed by a return-value tail expression.
-    /// `~` inside the if-body are expanded; the tail is wrapped in `Ok(...)`.
+    /// `bind*` inside the if-body are expanded; the tail is wrapped in `Ok(...)`.
     mod with_if_block_statement_then_tail {
       use super::*;
 
       #[test]
-      fn expands_tilde_in_if_body_and_ok_wraps_tail() {
+      fn expands_bind_star_in_if_body_and_ok_wraps_tail() {
         let path = quote! { ::id_effect };
-        let out = expand_bare_body(quote! { if cond { ~ f ( ) ; } A :: default ( ) }, &path);
+        let out = expand_bare_body(quote! { if cond { bind* f ( ) ; } A :: default ( ) }, &path);
         let expected = quote! {
           if cond { ({ use ::id_effect::IntoBindFastExt as _; (f()).__into_bind_fast(__effect_r).await? }) ; } ;
           ::core::result::Result::Ok(A :: default ())
@@ -807,12 +828,12 @@ mod tests {
         assert_ts_eq!(out, expected);
       }
 
-      /// Multiple `~` statements inside the if-body, all expanded correctly.
+      /// Multiple `bind*` statements inside the if-body, all expanded correctly.
       #[test]
-      fn expands_multiple_tildes_in_if_body_and_ok_wraps_tail() {
+      fn expands_multiple_bind_stars_in_if_body_and_ok_wraps_tail() {
         let path = quote! { ::id_effect };
         let out = expand_bare_body(
-          quote! { if n < 2 { ~ log_warn ( "msg" ) ; ~ fail ( err ) ; } A :: default ( ) },
+          quote! { if n < 2 { bind* log_warn ( "msg" ) ; bind* fail ( err ) ; } A :: default ( ) },
           &path,
         );
         let expected = quote! {
@@ -847,8 +868,8 @@ mod tests {
       }
     }
 
-    /// Same as bare literal tail; closure `r` appears in `into_bind` when `~` is present.
-    mod with_tail_having_no_tilde_operator {
+    /// Same as bare literal tail; closure `r` appears in `into_bind` when `bind*` is present.
+    mod with_tail_having_no_bind_star_operator {
       use super::*;
 
       #[test]
@@ -878,15 +899,15 @@ mod tests {
       }
     }
 
-    /// Parity: `~` expansion uses custom `r`.
-    mod with_prefix_tilde_on_tail {
+    /// Parity: `bind*` expansion uses custom `r`.
+    mod with_prefix_bind_star_on_tail {
       use super::*;
 
       #[test]
       fn into_bind_second_arg_matches_param_ident() {
         let path = quote! { ::id_effect };
         let r = r_custom();
-        let out = expand_closure_body(quote! { ~ g ( ) }, &r, &path);
+        let out = expand_closure_body(quote! { bind* g ( ) }, &r, &path);
         let expected = quote! {
           { use ::id_effect::IntoBindFastExt as _; (g()).__into_bind_fast(my_r).await }
         };
@@ -1151,9 +1172,9 @@ mod tests {
   }
 
   // ---------------------------------------------------------------------------
-  // desugar_ident_tilde_bind — direct (module name avoids shadowing [`super::desugar_ident_tilde_bind`].)
+  // desugar_ident_bind_star — direct (module name avoids shadowing [`super::desugar_ident_bind_star`].)
   // ---------------------------------------------------------------------------
-  mod ident_tilde_desugar {
+  mod ident_bind_star_desugar {
     use super::*;
 
     /// Branch: empty stream → unchanged.
@@ -1163,7 +1184,7 @@ mod tests {
       #[test]
       fn passthrough() {
         let input = TokenStream::new();
-        assert_ts_eq!(desugar_ident_tilde_bind(input.clone()), input);
+        assert_ts_eq!(desugar_ident_bind_star(input.clone()), input);
       }
     }
 
@@ -1174,49 +1195,49 @@ mod tests {
       #[test]
       fn passthrough() {
         let input = quote! { x };
-        assert_ts_eq!(desugar_ident_tilde_bind(input.clone()), input);
+        assert_ts_eq!(desugar_ident_bind_star(input.clone()), input);
       }
     }
 
-    /// Branch: `ident` + punct other than `~` → unchanged.
-    mod ident_then_non_tilde_punct {
+    /// Branch: `ident` + punct other than `bind*` → unchanged.
+    mod ident_then_non_bind_star_punct {
       use super::*;
 
       #[test]
       fn passthrough() {
         let input = quote! { a + b };
-        assert_ts_eq!(desugar_ident_tilde_bind(input.clone()), input);
+        assert_ts_eq!(desugar_ident_bind_star(input.clone()), input);
       }
     }
 
-    /// Branch: non-ident first token (literal, group, punct) + `~` → unchanged.
+    /// Branch: non-ident first token (literal, group, punct) + `bind*` → unchanged.
     mod non_ident_first_token {
       use super::*;
 
       #[test]
       fn passthrough() {
-        let input = quote! { 1 ~ x };
-        assert_ts_eq!(desugar_ident_tilde_bind(input.clone()), input);
+        let input = quote! { 1 bind* x };
+        assert_ts_eq!(desugar_ident_bind_star(input.clone()), input);
       }
     }
 
-    /// Branch: `ident ~ rest` → `let ident = ~ rest`.
-    mod ident_tilde_at_start {
+    /// Branch: `ident bind* rest` → `let ident = bind* rest`.
+    mod ident_bind_star_at_start {
       use super::*;
 
       #[test]
-      fn rewrites_to_let_with_prefix_tilde() {
-        let out = desugar_ident_tilde_bind(quote! { k ~ foo ( ) });
-        let expected = quote! { let k = ~ foo ( ) };
+      fn rewrites_to_let_with_prefix_bind_star() {
+        let out = desugar_ident_bind_star(quote! { k bind* foo ( ) });
+        let expected = quote! { let k = bind* foo ( ) };
         assert_ts_eq!(out, expected);
       }
     }
   }
 
   // ---------------------------------------------------------------------------
-  // expand_tilde — direct (module name avoids shadowing [`super::expand_tilde`].)
+  // expand_bind_star — direct (module name avoids shadowing [`super::expand_bind_star`].)
   // ---------------------------------------------------------------------------
-  mod tilde_expansion {
+  mod bind_star_expansion {
     use super::*;
 
     fn r_env() -> syn::Ident {
@@ -1236,12 +1257,12 @@ mod tests {
         let r = r_env();
         let path = path_effect();
         let input = TokenStream::new();
-        assert_ts_eq!(expand_tilde(input.clone(), &r, &path), input);
+        assert_ts_eq!(expand_bind_star(input.clone(), &r, &path), input);
       }
     }
 
-    /// Branch: no `~` → unchanged (modulo group recursion copying structure).
-    mod no_tilde_operator {
+    /// Branch: no `bind*` → unchanged (modulo group recursion copying structure).
+    mod no_bind_star_operator {
       use super::*;
 
       #[test]
@@ -1249,51 +1270,51 @@ mod tests {
         let r = r_env();
         let path = path_effect();
         let input = quote! { a + b };
-        assert_ts_eq!(expand_tilde(input.clone(), &r, &path), input);
+        assert_ts_eq!(expand_bind_star(input.clone(), &r, &path), input);
       }
     }
 
-    /// Branch: one `~` + operand.
-    mod single_prefix_tilde {
+    /// Branch: one `bind*` + operand.
+    mod single_prefix_bind_star {
       use super::*;
 
       #[test]
       fn wraps_into_bind_in_parens() {
         let r = r_env();
         let path = path_effect();
-        let out = expand_tilde(quote! { ~ foo ( ) }, &r, &path);
+        let out = expand_bind_star(quote! { bind* foo ( ) }, &r, &path);
         let expected = quote! { ({ use ::id_effect::IntoBindFastExt as _; (foo()).__into_bind_fast(r_env).await? }) };
         assert_ts_eq!(out, expected);
       }
     }
 
-    /// Branch: two `~` in sequence (two operands).
-    mod two_prefix_tildes {
+    /// Branch: two `bind*` in sequence (two operands).
+    mod two_prefix_bind_stars {
       use super::*;
 
       #[test]
       fn expands_both_operands() {
         let r = r_env();
         let path = path_effect();
-        // `;` is not an operand boundary for `collect_tilde_operand`; `,` at depth 0 is.
-        let out = expand_tilde(quote! { ~ f ( ) , ~ g ( ) }, &r, &path);
+        // `;` is not an operand boundary for `collect_bind_star_operand`; `,` at depth 0 is.
+        let out = expand_bind_star(quote! { bind* f ( ) , bind* g ( ) }, &r, &path);
         let expected = quote! {
           ({ use ::id_effect::IntoBindFastExt as _; (f()).__into_bind_fast(r_env).await? }) , ({ use ::id_effect::IntoBindFastExt as _; (g()).__into_bind_fast(r_env).await? })
         };
         assert_ts_eq!(out, expected);
       }
 
-      /// Two `~` separated by `;` inside a brace group — each should expand independently.
-      /// Both `~f()` and `~g()` must become separate `into_bind` calls; the `;` is a
+      /// Two `bind*` separated by `;` inside a brace group — each should expand independently.
+      /// Both `bind* f()` and `bind* g()` must become separate `into_bind` calls; the `;` is a
       /// statement separator, not part of either operand.
       ///
-      /// Currently FAILS: `;` is not a stop character in `collect_tilde_operand`, so the
-      /// first `~` swallows `f() ; ~g()` as one operand.
+      /// Currently FAILS: `;` is not a stop character in `collect_bind_star_operand`, so the
+      /// first `bind*` swallows `f() ; bind* g()` as one operand.
       #[test]
       fn expands_both_operands_separated_by_semicolon_inside_block() {
         let r = r_env();
         let path = path_effect();
-        let out = expand_tilde(quote! { { ~ f ( ) ; ~ g ( ) } }, &r, &path);
+        let out = expand_bind_star(quote! { { bind* f ( ) ; bind* g ( ) } }, &r, &path);
         let expected = quote! {
           { ({ use ::id_effect::IntoBindFastExt as _; (f()).__into_bind_fast(r_env).await? }) ; ({ use ::id_effect::IntoBindFastExt as _; (g()).__into_bind_fast(r_env).await? }) }
         };
@@ -1301,57 +1322,57 @@ mod tests {
       }
     }
 
-    /// Branch: `~` inside `{ ... }` — recurse, no Ok-wrap here.
-    mod tilde_inside_brace_group {
+    /// Branch: `bind*` inside `{ ... }` — recurse, no Ok-wrap here.
+    mod bind_star_inside_brace_group {
       use super::*;
 
       #[test]
       fn expands_inside_group() {
         let r = r_env();
         let path = path_effect();
-        let out = expand_tilde(quote! { { ~ a ( ) } }, &r, &path);
+        let out = expand_bind_star(quote! { { bind* a ( ) } }, &r, &path);
         let expected = quote! { { ({ use ::id_effect::IntoBindFastExt as _; (a()).__into_bind_fast(r_env).await? }) } };
         assert_ts_eq!(out, expected);
       }
     }
 
-    /// Branch: `~` inside `( ... )`.
-    mod tilde_inside_paren_group {
+    /// Branch: `bind*` inside `( ... )`.
+    mod bind_star_inside_paren_group {
       use super::*;
 
       #[test]
       fn expands_inside_group() {
         let r = r_env();
         let path = path_effect();
-        let out = expand_tilde(quote! { ( ~ b ( ) ) }, &r, &path);
+        let out = expand_bind_star(quote! { ( bind* b ( ) ) }, &r, &path);
         let expected = quote! { (({ use ::id_effect::IntoBindFastExt as _; (b()).__into_bind_fast(r_env).await? })) };
         assert_ts_eq!(out, expected);
       }
     }
 
-    /// Branch: `~` inside `[ ... ]`.
-    mod tilde_inside_bracket_group {
+    /// Branch: `bind*` inside `[ ... ]`.
+    mod bind_star_inside_bracket_group {
       use super::*;
 
       #[test]
       fn expands_inside_group() {
         let r = r_env();
         let path = path_effect();
-        let out = expand_tilde(quote! { [ ~ c ( ) ] }, &r, &path);
+        let out = expand_bind_star(quote! { [ bind* c ( ) ] }, &r, &path);
         let expected = quote! { [({ use ::id_effect::IntoBindFastExt as _; (c()).__into_bind_fast(r_env).await? })] };
         assert_ts_eq!(out, expected);
       }
     }
 
-    /// Branch: nested groups with multiple `~`.
-    mod nested_groups_with_multiple_tildes {
+    /// Branch: nested groups with multiple `bind*`.
+    mod nested_groups_with_multiple_bind_stars {
       use super::*;
 
       #[test]
       fn expands_depth_first_operands() {
         let r = r_env();
         let path = path_effect();
-        let out = expand_tilde(quote! { { ~ u ( ) , ~ v ( ) } }, &r, &path);
+        let out = expand_bind_star(quote! { { bind* u ( ) , bind* v ( ) } }, &r, &path);
         let expected = quote! {
           { ({ use ::id_effect::IntoBindFastExt as _; (u()).__into_bind_fast(r_env).await? }) , ({ use ::id_effect::IntoBindFastExt as _; (v()).__into_bind_fast(r_env).await? }) }
         };
@@ -1361,9 +1382,9 @@ mod tests {
   }
 
   // ---------------------------------------------------------------------------
-  // collect_tilde_operand — direct (module name avoids shadowing [`super::collect_tilde_operand`].)
+  // collect_bind_star_operand — direct (module name avoids shadowing [`super::collect_bind_star_operand`].)
   // ---------------------------------------------------------------------------
-  mod tilde_operand_collection {
+  mod bind_star_operand_collection {
     use super::*;
 
     /// Operand empty (immediate `,` / `>` / end) — edge case.
@@ -1372,17 +1393,17 @@ mod tests {
 
       #[test]
       fn collects_nothing_before_terminator_end() {
-        assert!(operand_after_tilde_prefix(quote! { ~ }).is_empty());
+        assert!(operand_after_bind_star_prefix(quote! { bind* }).is_empty());
       }
 
       #[test]
       fn collects_nothing_before_comma() {
-        assert!(operand_after_tilde_prefix(quote! { ~ , y }).is_empty());
+        assert!(operand_after_bind_star_prefix(quote! { bind* , y }).is_empty());
       }
 
       #[test]
       fn collects_nothing_before_gt_at_depth_zero() {
-        assert!(operand_after_tilde_prefix(quote! { ~ > z }).is_empty());
+        assert!(operand_after_bind_star_prefix(quote! { bind* > z }).is_empty());
       }
     }
 
@@ -1393,7 +1414,7 @@ mod tests {
       #[test]
       fn collects_full_remaining_tokens() {
         assert_ts_eq!(
-          operand_after_tilde_prefix(quote! { ~ foo ( ) }),
+          operand_after_bind_star_prefix(quote! { bind* foo ( ) }),
           quote! { foo ( ) }
         );
       }
@@ -1405,7 +1426,7 @@ mod tests {
 
       #[test]
       fn does_not_include_following_comma_or_args() {
-        assert_ts_eq!(operand_after_tilde_prefix(quote! { ~ a , b }), quote! { a });
+        assert_ts_eq!(operand_after_bind_star_prefix(quote! { bind* a , b }), quote! { a });
       }
     }
 
@@ -1416,7 +1437,7 @@ mod tests {
       #[test]
       fn keeps_commas_inside_angles_in_operand() {
         assert_ts_eq!(
-          operand_after_tilde_prefix(quote! { ~ p :: < T , U > ( ) }),
+          operand_after_bind_star_prefix(quote! { bind* p :: < T , U > ( ) }),
           quote! { p :: < T , U > ( ) }
         );
       }
@@ -1424,7 +1445,7 @@ mod tests {
       #[test]
       fn closes_each_angle_with_greater_than() {
         assert_ts_eq!(
-          operand_after_tilde_prefix(quote! { ~ q :: < Vec < u8 > > ( ) }),
+          operand_after_bind_star_prefix(quote! { bind* q :: < Vec < u8 > > ( ) }),
           quote! { q :: < Vec < u8 > > ( ) }
         );
       }
@@ -1437,46 +1458,46 @@ mod tests {
       #[test]
       fn stops_before_gt() {
         assert_ts_eq!(
-          operand_after_tilde_prefix(quote! { ~ a > tail }),
+          operand_after_bind_star_prefix(quote! { bind* a > tail }),
           quote! { a }
         );
       }
     }
 
-    /// Whole `Group` following `~` is one token in operand.
-    mod group_following_tilde {
+    /// Whole `Group` following `bind*` is one token in operand.
+    mod group_following_bind_star {
       use super::*;
 
       /// `( )` and `[ ]` groups are call-arg / index expressions — always consumed.
       #[test]
       fn consumes_paren_and_bracket_groups() {
         assert_ts_eq!(
-          operand_after_tilde_prefix(quote! { ~ ( y ) }),
+          operand_after_bind_star_prefix(quote! { bind* ( y ) }),
           quote! { ( y ) }
         );
         assert_ts_eq!(
-          operand_after_tilde_prefix(quote! { ~ [ z ] }),
+          operand_after_bind_star_prefix(quote! { bind* [ z ] }),
           quote! { [ z ] }
         );
       }
 
-      /// `{ }` brace group directly after `~` (with nothing before it) — stops immediately,
+      /// `{ }` brace group directly after `bind*` (with nothing before it) — stops immediately,
       /// producing an empty operand.  Use `~ ( { x } )` if a block-as-operand is intended.
       #[test]
       fn stops_before_leading_brace_group() {
-        assert!(operand_after_tilde_prefix(quote! { ~ { x } }).is_empty());
+        assert!(operand_after_bind_star_prefix(quote! { bind* { x } }).is_empty());
       }
 
-      /// A call like `~foo() { body }` — the `{ body }` brace group is a new block statement,
+      /// A call like `bind* foo() { body }` — the `{ body }` brace group is a new block statement,
       /// not part of the call's argument list.  The operand should be just `foo()`;
       /// the `{ body }` brace group should stay in the surrounding token stream.
       ///
-      /// Currently FAILS: `collect_tilde_operand` consumes all `Group` tokens unconditionally,
+      /// Currently FAILS: `collect_bind_star_operand` consumes all `Group` tokens unconditionally,
       /// so `{ body }` is eaten into the operand.
       #[test]
       fn stops_before_brace_group_after_call() {
         assert_ts_eq!(
-          operand_after_tilde_prefix(quote! { ~ foo ( ) { body } }),
+          operand_after_bind_star_prefix(quote! { bind* foo ( ) { body } }),
           quote! { foo ( ) }
         );
       }
@@ -1489,7 +1510,7 @@ mod tests {
       #[test]
       fn includes_dot_calls_in_operand() {
         assert_ts_eq!(
-          operand_after_tilde_prefix(quote! { ~ foo ( ) . bar ( ) . baz }),
+          operand_after_bind_star_prefix(quote! { bind* foo ( ) . bar ( ) . baz }),
           quote! { foo ( ) . bar ( ) . baz }
         );
       }
@@ -1502,7 +1523,7 @@ mod tests {
       #[test]
       fn operand_boundary_differs_from_rust_parse() {
         assert_ts_eq!(
-          operand_after_tilde_prefix(quote! { ~ v :: < u8 > > ( ) }),
+          operand_after_bind_star_prefix(quote! { bind* v :: < u8 > > ( ) }),
           quote! { v :: < u8 > }
         );
       }

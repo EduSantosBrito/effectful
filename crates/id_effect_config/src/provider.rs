@@ -25,7 +25,7 @@ use crate::error::ConfigError;
 /// Injectable wrapper around an `Arc<dyn ConfigProvider>`.
 ///
 /// Extract it with `Get::<ConfigProviderKey, Here>::get(r)` inside an `effect!`
-/// body, or use `~ConfigProviderService` for the async variant.
+/// body, or use `bind* ConfigProviderService` for the async variant.
 #[derive(Clone)]
 pub struct ConfigProviderService(pub Arc<dyn ConfigProvider>);
 

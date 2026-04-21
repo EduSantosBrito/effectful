@@ -266,7 +266,7 @@ pub fn check_multi_step_flat_map(cx: &LateContext<'_>, expr: &rustc_hir::Expr<'_
           expr.span,
           "chained `.flat_map(…).flat_map(…)` found",
           None,
-          "use `effect! { let a = ~ step_a(); let b = ~ step_b(a); … }` instead",
+          "use `effect! { let a = bind* step_a(); let b = bind* step_b(a); … }` instead",
         );
       }
     }

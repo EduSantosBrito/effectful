@@ -1,5 +1,5 @@
-//! Extract [`EffectLogger`] once with `~EffectLogger`, then call its methods
-//! as `~logger.level(…)` steps — each returns `Effect<(), EffectLoggerError, R>`.
+//! Extract [`EffectLogger`] once with `bind* EffectLogger`, then call its methods
+//! as `bind* logger.level(…)` steps — each returns `Effect<(), EffectLoggerError, R>`.
 //!
 //! Run: `RUST_LOG=trace devenv shell -- cargo run -p logger --example log_effects`
 
@@ -21,14 +21,14 @@ fn main() {
     .init();
 
   let prog: Effect<(), EffectLoggerError, LogCtx> = effect!(|_r: &mut LogCtx| {
-    let logger = ~EffectLogger;
-    ~logger.trace("trace step");
-    ~logger.debug("debug step");
-    ~logger.info("info step");
-    ~logger.warn("warn step");
-    ~logger.error("error step");
+    let logger = bind* EffectLogger;
+    bind* logger.trace("trace step");
+    bind* logger.debug("debug step");
+    bind* logger.info("info step");
+    bind* logger.warn("warn step");
+    bind* logger.error("error step");
   });
 
   run_blocking(prog, build_ctx()).expect("tracing never fails");
-  println!("ran all five log levels via ~EffectLogger");
+  println!("ran all five log levels via bind* EffectLogger");
 }

@@ -1,7 +1,7 @@
 //! Unified interpreter-style effects, piping, and **build-time** context wiring.
 //!
 //! - **[`mod@kernel`]** — unified [`Effect<A, E, R>`] plus [`into_bind`].
-//! - **[`effect!`](macro@effect)** — procedural do-notation (`x ~ expr` bind, `~ expr` discard), tail `Ok(expr)`; see [`macros`].
+//! - **[`effect!`](macro@effect)** — procedural do-notation (`let x = bind* expr` bind, `bind* expr` discard), tail `Ok(expr)`; see [`macros`].
 //! - **[`mod@macros`]** — declarative macros ([`pipe!`](macro@pipe), [`ctx!`](macro@ctx), …).
 //! - **[`context`]** — [`Tag`], [`Tagged`], [`Cons`] / [`Nil`], [`Get`] / [`GetMut`].
 //! - **[`layer`]** — [`Layer`], [`Stack`], [`StackThen`], [`LayerFn`].

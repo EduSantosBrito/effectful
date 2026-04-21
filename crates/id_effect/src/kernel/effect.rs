@@ -311,7 +311,7 @@ where
 
 // ── IntoBind ────────────────────────────────────────────────────────────────
 
-/// Values that can be sequenced like [`Effect::run`] inside `async` bind chains (`~await` / `flat_map`).
+/// Values that can be sequenced like [`Effect::run`] inside `async` bind chains (`bind*` / `flat_map`).
 pub trait IntoBind<'a, R, A, E> {
   /// Turns `self` into a boxed future given the environment `r`.
   fn into_bind(self, r: &'a mut R) -> BoxFuture<'a, Result<A, E>>;

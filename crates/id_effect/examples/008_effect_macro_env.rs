@@ -7,7 +7,7 @@ type Env = Context<Cons<Tagged<CounterKey, i32>, Nil>>;
 
 fn main() {
   let program = effect!(|r: &mut Env| {
-    let n = ~succeed(*Get::<CounterKey>::get(r));
+    let n = bind* succeed(*Get::<CounterKey>::get(r));
     n + 1
   });
   let env = ctx!(CounterKey => 41_i32);

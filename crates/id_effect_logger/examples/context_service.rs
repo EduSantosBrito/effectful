@@ -1,5 +1,5 @@
 //! Provide [`EffectLogger`] via a concrete [`Context`], then extract it inside
-//! `effect!` with `~EffectLogger` and use its methods with `~`.
+//! `effect!` with `bind* EffectLogger` and use its methods with bind*.
 //!
 //! Run: `devenv shell -- cargo run -p logger --example context_service`
 
@@ -18,9 +18,9 @@ fn main() {
     .init();
 
   let prog: Effect<(), EffectLoggerError, LogR> = effect!(|_r: &mut LogR| {
-    let logger = ~EffectLogger;
-    ~logger.info("resolved EffectLogger via Context + provide_service");
-    ~logger.warn("warn from the same extracted logger");
+    let logger = bind* EffectLogger;
+    bind* logger.info("resolved EffectLogger via Context + provide_service");
+    bind* logger.warn("warn from the same extracted logger");
   });
 
   run_blocking(prog, build_ctx()).expect("EffectLoggerError is never produced by tracing");

@@ -1,4 +1,4 @@
-//! Log inside `effect!` using `~EffectLogger` extraction and `~logger.level(…)` steps,
+//! Log inside `effect!` using `bind* EffectLogger` extraction and `bind* logger.level(…)` steps,
 //! then compute a return value — demonstrating the full service/tag pattern.
 //!
 //! Run: `devenv shell -- cargo run -p logger --example macro_sync_bind`
@@ -18,13 +18,13 @@ fn main() {
     .init();
 
   // Extract the logger once, then use it across multiple steps.
-  // ~succeed(...) binds a pure value; ~logger.info(...) logs as an effect step.
+  // bind* succeed(...) binds a pure value; bind* logger.info(...) logs as an effect step.
   let program: Effect<i32, EffectLoggerError, LogCtx> = effect!(|_r: &mut LogCtx| {
-    let logger = ~EffectLogger;
-    ~logger.info("first step: log_info via ~logger");
-    ~logger.warn("second step: log_warn via ~logger");
-    let n = ~succeed::<i32, EffectLoggerError, LogCtx>(21);
-    let m = ~succeed::<i32, EffectLoggerError, LogCtx>(n * 2);
+    let logger = bind* EffectLogger;
+    bind* logger.info("first step: log_info via bind* logger");
+    bind* logger.warn("second step: log_warn via bind* logger");
+    let n = bind* succeed::<i32, EffectLoggerError, LogCtx>(21);
+    let m = bind* succeed::<i32, EffectLoggerError, LogCtx>(n * 2);
     m
   });
 

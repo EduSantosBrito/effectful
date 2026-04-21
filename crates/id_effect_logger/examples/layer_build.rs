@@ -1,6 +1,6 @@
 //! Build the logger layer with [`id_effect_logger::layer_effect_logger`]
 //! ([`id_effect::layer_service`] / Effect.ts `Layer.succeed`), then assemble a
-//! [`Context`] and run an effect that extracts `EffectLogger` via `~EffectLogger`.
+//! [`Context`] and run an effect that extracts `EffectLogger` via `bind* EffectLogger`.
 //!
 //! Run: `devenv shell -- cargo run -p logger --example layer_build`
 
@@ -22,8 +22,8 @@ fn main() {
     .init();
 
   let prog: Effect<(), EffectLoggerError, LogEnv> = effect!(|_r: &mut LogEnv| {
-    let logger = ~EffectLogger;
-    ~logger.info("logger provided via layer_effect_logger build");
+    let logger = bind* EffectLogger;
+    bind* logger.info("logger provided via layer_effect_logger build");
   });
 
   let result: Result<(), EffectLoggerError> = run_blocking(prog, build_env());

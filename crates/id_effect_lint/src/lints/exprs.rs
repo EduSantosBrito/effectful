@@ -34,7 +34,7 @@ pub fn check_no_await_outside_from_async(cx: &LateContext<'_>, expr: &rustc_hir:
       "`.await` used outside of a `from_async` wrapper",
       None,
       "wrap async calls with `from_async(|_r| async move { expr.await })` \
-             and use `~ from_async(…)` inside `effect!`",
+             and use `bind* from_async(…)` inside `effect!`",
     );
   }
 }
@@ -195,7 +195,7 @@ pub fn check_no_unwrap_in_effect(
         expr.span,
         format!("`.{name}()` used inside an Effect-returning function"),
         None,
-        "use typed error propagation: `?`, `~ effect.map_error(Into::into)`, \
+        "use typed error propagation: `?`, `bind* effect.map_error(Into::into)`, \
                  or `fail(MyError::…)`",
       );
     }
@@ -352,7 +352,7 @@ pub fn check_no_system_time_now(cx: &LateContext<'_>, expr: &rustc_hir::Expr<'_>
         "direct time access (`SystemTime::now()` / `Utc::now()`) in domain code",
         None,
         "inject time through the `Clock` service: add `R: NeedsClock + 'static` \
-                 and use `~ ClockKey` inside `effect!`",
+                 and use `bind* ClockKey` inside `effect!`",
       );
     }
   }

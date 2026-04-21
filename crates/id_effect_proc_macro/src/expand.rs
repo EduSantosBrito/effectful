@@ -131,7 +131,7 @@ mod tests {
 
   #[test]
   fn bind_in_bare_effect_uses_new_inline_async() {
-    let input = quote! { ~fail::<(), (), ()>(()) };
+    let input = quote! { bind* fail::<(), (), ()>(()) };
     let kind = parse_effect_input(input).expect("parse");
     let out = expand(kind);
     assert!(
@@ -199,7 +199,7 @@ mod tests {
   #[test]
   fn bind_in_do_notation_with_unit_env_uses_new_inline_async() {
     // Do-notation with R = () should use new_inline_async, avoiding the closure box
-    let input = quote! { |_r: &mut ()| { ~fail::<(), (), ()>(()) } };
+    let input = quote! { |_r: &mut ()| { bind* fail::<(), (), ()>(()) } };
     let kind = parse_effect_input(input).expect("parse");
     let out = expand(kind);
     assert!(
@@ -219,7 +219,7 @@ mod tests {
   #[test]
   fn bind_in_do_notation_with_non_unit_env_uses_new_async() {
     // Do-notation with R != () should still use new_async
-    let input = quote! { |r: &mut String| { ~fail::<(), (), String>(()) } };
+    let input = quote! { |r: &mut String| { bind* fail::<(), (), String>(()) } };
     let kind = parse_effect_input(input).expect("parse");
     let out = expand(kind);
     assert!(

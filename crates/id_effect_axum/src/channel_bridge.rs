@@ -37,7 +37,7 @@ where
 {
   effect!(|r: &mut R| {
     let ch = ch.clone();
-    ~Effect::new_async(move |env: &mut R| {
+    bind* Effect::new_async(move |env: &mut R| {
       box_future(async move {
         ch.write(req).run(env).await.unwrap();
         match ch.read().run(env).await {

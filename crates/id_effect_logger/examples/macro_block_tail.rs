@@ -1,6 +1,6 @@
-//! Mix `~` effect steps with ordinary Rust control flow inside `effect!`.
+//! Mix bind* effect steps with ordinary Rust control flow inside `effect!`.
 //! Extract the logger once, then use it inside an `if` block — demonstrating
-//! that `~` works anywhere as an expression.
+//! that bind* works anywhere as an expression.
 //!
 //! Run: `devenv shell -- cargo run -p logger --example macro_block_tail`
 
@@ -19,10 +19,10 @@ fn main() {
     .init();
 
   let program: Effect<i32, EffectLoggerError, LogCtx> = effect!(|_r: &mut LogCtx| {
-    let logger = ~EffectLogger;
-    let seed = ~succeed::<i32, EffectLoggerError, LogCtx>(6);
+    let logger = bind* EffectLogger;
+    let seed = bind* succeed::<i32, EffectLoggerError, LogCtx>(6);
     if seed > 0 {
-      ~logger.info("seed is positive");
+      bind* logger.info("seed is positive");
     }
     seed * 7
   });

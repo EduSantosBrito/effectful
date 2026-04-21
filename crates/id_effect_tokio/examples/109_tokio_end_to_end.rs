@@ -60,15 +60,15 @@ fn fetch_quotes_async() -> Effect<Vec<Quote>, AppError, Env> {
 
 fn market_report() -> Effect<Report, AppError, Env> {
   effect!(|r: &mut Env| {
-    let min_price = ~Ok::<f64, AppError>(*r.get_path::<MinPriceKey, Skip2>());
+    let min_price = bind* Ok::<f64, AppError>(*r.get_path::<MinPriceKey, Skip2>());
 
-    let filtered: Vec<Quote> = ~Stream::from_effect(fetch_quotes_async())
+    let filtered: Vec<Quote> = bind* Stream::from_effect(fetch_quotes_async())
       .filter(Box::new(move |q: &Quote| q.price >= min_price))
       .run_collect();
 
-    let kept = ~Ok::<usize, AppError>(filtered.len());
+    let kept = bind* Ok::<usize, AppError>(filtered.len());
 
-    let total_notional = ~Stream::from_effect(succeed::<Vec<Quote>, AppError, Env>(filtered))
+    let total_notional = bind* Stream::from_effect(succeed::<Vec<Quote>, AppError, Env>(filtered))
       .map(|q| q.price)
       .run_fold(0.0_f64, |acc, px| acc + px);
 

@@ -1,10 +1,10 @@
-//! Ex 007 — Discard a unit effect with `~expr;`.
+//! Ex 007 — Discard a unit effect with `bind* expr;`.
 use id_effect::{Effect, effect, run_blocking, succeed};
 
 fn main() {
   let program: Effect<i32, (), ()> = effect! {
-    ~succeed(());
-    ~succeed(());
+    bind* succeed(());
+    bind* succeed(());
     42_i32
   };
   assert_eq!(run_blocking(program, ()), Ok(42));

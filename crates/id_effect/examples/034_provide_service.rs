@@ -12,8 +12,8 @@ type Short = Context<Cons<id_effect::Service<ValueKey, i32>, Nil>>;
 
 fn main() {
   let program = effect!(|r: &mut Full| {
-    let on = ~Ok::<_, ()>(*Get::<GateKey>::get(r));
-    let v = ~Ok::<_, ()>(*r.get_path::<ValueKey, ThereHere>());
+    let on = bind* Ok::<_, ()>(*Get::<GateKey>::get(r));
+    let v = bind* Ok::<_, ()>(*r.get_path::<ValueKey, ThereHere>());
     if on {
       v
     } else {

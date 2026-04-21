@@ -3,8 +3,8 @@ use id_effect::{Effect, effect, run_blocking, succeed};
 
 fn main() {
   let program: Effect<i32, (), ()> = effect! {
-    let a = ~succeed(40_i32);
-    let b = ~succeed(2_i32);
+    let a = bind* succeed(40_i32);
+    let b = bind* succeed(2_i32);
     a + b
   };
   assert_eq!(run_blocking(program, ()), Ok(42));

@@ -43,3 +43,5 @@ pub fn effect(input: TokenStream) -> TokenStream {
   };
   expand::expand(kind).into()
 }
+mod test_yield;
+mod test_bind_star;

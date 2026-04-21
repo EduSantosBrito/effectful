@@ -7,7 +7,7 @@ use syn::{Ident, Result, Token, Type};
 /// Supported: do-notation with `|env: &mut R| { ... }`, optional `move`, or bare `effect! { ... }`.
 ///
 /// Expansion: bind-free bodies with **no** `.await` use `Effect::new` (sync closure). Bodies **with**
-/// `~` or **with** `.await` use `Effect::new_async` and an inner `async move` block. You do not write
+/// `bind*` or **with** `.await` use `Effect::new_async` and an inner `async move` block. You do not write
 /// `async` on the closure — the macro wraps the body when needed.
 pub enum EffectKind {
   /// `effect!(|env: &mut R| { ... })` or `effect!(move |env: &mut R| { ... })` — do-notation; outer closure is always `move` in the expansion.
@@ -242,7 +242,7 @@ mod tests {
 
       #[test]
       fn tokens_without_async_or_pipe_are_bare() {
-        let ts: TokenStream = quote! { a ~ x; 1 };
+        let ts: TokenStream = quote! { a bind* x; 1 };
         assert!(matches!(
           parse_effect_input(ts).unwrap(),
           EffectKind::Bare { .. }

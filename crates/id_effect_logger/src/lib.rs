@@ -2,14 +2,14 @@
 //!
 //! # Service/Tag pattern
 //!
-//! Extract the logger from the environment once with `~EffectLogger`, then call
+//! Extract the logger from the environment once with `bind* EffectLogger`, then call
 //! its methods as regular effectful steps:
 //!
 //! ```ignore
 //! effect!(|_r: &mut R| {
-//!     let logger = ~EffectLogger;
-//!     ~logger.warn("something suspicious");
-//!     ~logger.info("all good");
+//!     let logger = bind* EffectLogger;
+//!     bind* logger.warn("something suspicious");
+//!     bind* logger.info("all good");
 //!     result
 //! })
 //! ```
@@ -133,9 +133,9 @@ fn test_clear_all_logger_tls() {
 
 /// Log sink for use as [`id_effect::Service<EffectLogKey, Self>`](id_effect::Service); forwards to [`tracing`].
 ///
-/// Extracted from the environment with `~EffectLogger` inside [`id_effect::effect!`].
+/// Extracted from the environment with `bind* EffectLogger` inside [`id_effect::effect!`].
 /// After extraction its methods return `Effect<(), EffectLoggerError, R>` and
-/// are themselves awaited with `~`.
+/// are themselves awaited with bind*.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct EffectLogger;
 
@@ -401,13 +401,13 @@ impl EffectLogger {
 }
 
 // ---------------------------------------------------------------------------
-// Service extraction: `~EffectLogger` inside `effect!`
+// Service extraction: `bind* EffectLogger` inside `effect!`
 // ---------------------------------------------------------------------------
 
-/// Implementing [`IntoBind`] for [`EffectLogger`] makes `~EffectLogger` valid
+/// Implementing [`IntoBind`] for [`EffectLogger`] makes `bind* EffectLogger` valid
 /// inside any `effect!` whose environment `R` holds an `EffectLogger` under
 /// [`EffectLogKey`].  The zero-sized struct acts as its own "request token":
-/// passing it to `~` copies the concrete value out of `R` and binds it as a
+/// passing it to bind* copies the concrete value out of `R` and binds it as a
 /// local variable.
 impl<'a, R> IntoBind<'a, R, EffectLogger, EffectLoggerError> for EffectLogger
 where

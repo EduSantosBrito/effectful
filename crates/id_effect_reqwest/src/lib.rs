@@ -163,7 +163,7 @@ where
 {
   effect!(|r: &mut R| {
     let pool = Get::<ReqwestPoolKey>::get(r).clone();
-    let (pooled, scope) = ~from_async(move |_r| async move {
+    let (pooled, scope) = bind* from_async(move |_r| async move {
       let mut scope = Scope::make();
       let pooled = pool
         .get()
@@ -172,7 +172,7 @@ where
         .expect("pool factory is infallible");
       Ok::<(PooledClient, Scope), E>((pooled, scope))
     });
-    let resp = ~from_async(move |_r| async move {
+    let resp = bind* from_async(move |_r| async move {
       build(&pooled).send().await.map_err(E::from)
     });
     scope.close();
@@ -225,15 +225,15 @@ where
   effect!(|r: &mut R| {
     let client = Get::<ReqwestClientKey>::get(r).clone();
     let schema_arc = Arc::clone(&schema);
-    let resp = ~from_async(move |_r| async move {
+    let resp = bind* from_async(move |_r| async move {
       build(&client).send().await.map_err(JsonSchemaError::Http)
     });
-    let buf = ~from_async(move |_r| async move {
+    let buf = bind* from_async(move |_r| async move {
       resp.bytes().await.map_err(JsonSchemaError::Http)
     });
     match decode_response_schema(&schema_arc, &buf) {
       Ok(v) => v,
-      Err(e) => ~fail::<A, JsonSchemaError, R>(e),
+      Err(e) => bind* fail::<A, JsonSchemaError, R>(e),
     }
   })
 }
@@ -249,7 +249,7 @@ where
 {
   effect!(|r: &mut R| {
     let client = Get::<ReqwestClientKey>::get(r).clone();
-    ~from_async(move |_r| async move {
+    bind* from_async(move |_r| async move {
       build(&client)
         .send()
         .await
@@ -270,10 +270,10 @@ where
 {
   effect!(|r: &mut R| {
     let client = Get::<ReqwestClientKey>::get(r).clone();
-    let resp = ~from_async(move |_r| async move {
+    let resp = bind* from_async(move |_r| async move {
       build(&client).send().await.map_err(E::from)
     });
-    let body = ~from_async(move |_r| async move {
+    let body = bind* from_async(move |_r| async move {
       resp.text().await.map_err(E::from)
     });
     A::from(body)
@@ -291,10 +291,10 @@ where
 {
   effect!(|r: &mut R| {
     let client = Get::<ReqwestClientKey>::get(r).clone();
-    let resp = ~from_async(move |_r| async move {
+    let resp = bind* from_async(move |_r| async move {
       build(&client).send().await.map_err(E::from)
     });
-    let body = ~from_async(move |_r| async move {
+    let body = bind* from_async(move |_r| async move {
       resp.bytes().await.map_err(E::from)
     });
     A::from(body)
@@ -313,10 +313,10 @@ where
 {
   effect!(|r: &mut R| {
     let client = Get::<ReqwestClientKey>::get(r).clone();
-    let resp = ~from_async(move |_r| async move {
+    let resp = bind* from_async(move |_r| async move {
       build(&client).send().await.map_err(E::from)
     });
-    let value = ~from_async(move |_r| async move {
+    let value = bind* from_async(move |_r| async move {
       resp.json::<T>().await.map_err(E::from)
     });
     A::from(value)
@@ -332,7 +332,7 @@ where
   R: NeedsReqwestClient + 'static,
 {
   effect!(|_r: &mut R| {
-    let x = ~send(move |c| c.get(url));
+    let x = bind* send(move |c| c.get(url));
     x
   })
 }
@@ -346,7 +346,7 @@ where
   R: NeedsReqwestClient + 'static,
 {
   effect!(|_r: &mut R| {
-    let x = ~send(move |c| c.post(url));
+    let x = bind* send(move |c| c.post(url));
     x
   })
 }
@@ -360,7 +360,7 @@ where
   R: NeedsReqwestClient + 'static,
 {
   effect!(|_r: &mut R| {
-    let x = ~send(move |c| c.put(url));
+    let x = bind* send(move |c| c.put(url));
     x
   })
 }
@@ -374,7 +374,7 @@ where
   R: NeedsReqwestClient + 'static,
 {
   effect!(|_r: &mut R| {
-    let x = ~send(move |c| c.delete(url));
+    let x = bind* send(move |c| c.delete(url));
     x
   })
 }
@@ -388,7 +388,7 @@ where
   R: NeedsReqwestClient + 'static,
 {
   effect!(|_r: &mut R| {
-    let x = ~send(move |c| c.head(url));
+    let x = bind* send(move |c| c.head(url));
     x
   })
 }
@@ -402,7 +402,7 @@ where
   R: NeedsReqwestClient + 'static,
 {
   effect!(|_r: &mut R| {
-    let x = ~send(move |c| c.patch(url));
+    let x = bind* send(move |c| c.patch(url));
     x
   })
 }

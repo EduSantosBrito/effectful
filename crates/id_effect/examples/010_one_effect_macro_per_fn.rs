@@ -4,10 +4,10 @@ use id_effect::{effect, run_blocking, succeed};
 fn branch(flag: bool) -> id_effect::Effect<i32, (), ()> {
   effect!(|_r: &mut ()| {
     if flag {
-      let x = ~succeed(40_i32);
+      let x = bind* succeed(40_i32);
       x + 2
     } else {
-      let x = ~succeed(41_i32);
+      let x = bind* succeed(41_i32);
       x + 1
     }
   })
