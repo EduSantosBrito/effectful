@@ -1,0 +1,30 @@
+[package]
+name = "effectful_tokio"
+version = "0.2.0"
+edition = "2024"
+description = "Tokio runtime adapter and re-exports for the workspace `effectful` crate"
+license = "CC-BY-SA-4.0"
+repository = "https://github.com/Industrial/id_effect"
+
+[lints.rust]
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(coverage)',
+  'cfg(feature, values("mock"))',
+] }
+
+[lib]
+name = "effectful_tokio"
+
+[dependencies]
+effectful = { path = "../effectful", version = "0.2.0" }
+pin-project-lite = "0.2"
+tokio = { version = "1.50.0", features = [
+  "rt",
+  "rt-multi-thread",
+  "time",
+  "sync",
+] }
+
+[dev-dependencies]
+pollster = "0.4"

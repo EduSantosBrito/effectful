@@ -1,16 +1,16 @@
 [workspace]
 resolver = "2"
-exclude = [".tmp", "tmp", "crates/id_effect_lint"]
+exclude = [".tmp", "tmp", "crates/effectful_lint"]
 members = [
-  "crates/id_effect",
-  "crates/id_effect_axum",
-  "crates/id_effect_config",
-  "crates/id_effect_logger",
-  "crates/id_effect_macro",
-  "crates/id_effect_proc_macro",
-  "crates/id_effect_reqwest",
-  "crates/id_effect_tokio",
-  "crates/id_effect_tower",
+  "crates/effectful",
+  "crates/effectful_axum",
+  "crates/effectful_config",
+  "crates/effectful_logger",
+  "crates/effectful_macro",
+  "crates/effectful_proc_macro",
+  "crates/effectful_reqwest",
+  "crates/effectful_tokio",
+  "crates/effectful_tower",
 ]
 
 # More stable / comparable Criterion numbers than default bench profile (inherits release).

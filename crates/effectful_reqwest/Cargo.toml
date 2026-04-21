@@ -1,0 +1,38 @@
+[package]
+name = "effectful_reqwest"
+version = "0.2.0"
+edition = "2024"
+license = "CC-BY-SA-4.0"
+description = "reqwest integration for the workspace `effectful` crate — HTTP as Effect programs"
+repository = "https://github.com/Industrial/id_effect"
+
+[lints.rust]
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(coverage)',
+  'cfg(feature, values("mock"))',
+] }
+
+[lib]
+name = "effectful_reqwest"
+
+[dependencies]
+bytes = "1"
+effectful = { path = "../effectful", version = "0.2.0", features = [
+  "schema-serde",
+] }
+# `default-features = false` + `rustls`: avoid `native-tls` → ancient `openssl-sys`
+# lower bounds that break `cargo update -Z minimal-versions` on OpenSSL 3 (CI / modern Linux).
+# reqwest 0.13 renamed `rustls-tls` → `rustls`.
+reqwest = { version = "0.13", default-features = false, features = [
+  "json",
+  "gzip",
+  "rustls",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+effectful_tokio = { path = "../effectful_tokio", version = "0.2.0" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6"

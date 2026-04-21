@@ -1,0 +1,24 @@
+[package]
+name = "effectful_proc_macro"
+version = "0.2.0"
+edition = "2024"
+description = "Procedural `effect!` macro for the `effectful` crate (proc-macro only; declarative macros live in `effectful_macro`)"
+license = "CC-BY-SA-4.0"
+repository = "https://github.com/Industrial/id_effect"
+
+[lints.rust]
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(coverage)',
+  'cfg(feature, values("mock"))',
+] }
+
+[lib]
+name = "effectful_proc_macro"
+proc-macro = true
+
+[dependencies]
+proc-macro-crate = "3"
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full"] }
