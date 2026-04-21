@@ -66,7 +66,7 @@ mod tests {
   use rstest::rstest;
   use std::collections::HashMap;
 
-  #[derive(Clone, Debug, id_effect_proc_macro::EffectData)]
+  #[derive(Clone, Debug, effectful_proc_macro::EffectData)]
   struct Person {
     name: String,
     age: u32,
