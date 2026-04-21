@@ -1,3 +1,4 @@
+use proc_macro_crate::{FoundCrate, crate_name};
 use quote::quote;
 
 use crate::parse::EffectKind;
@@ -15,14 +16,30 @@ pub fn expand(kind: EffectKind) -> proc_macro2::TokenStream {
     } => {
       let r = &param;
       let env_ty = *env_ty;
-      let needs_async =
-        effect_body_contains_bind(body.clone()) || effect_body_contains_await(body.clone());
+      let has_bind = effect_body_contains_bind(body.clone());
+      let has_await = effect_body_contains_await(body.clone());
       let expanded = expand_closure_body(body, r, &path);
-      if needs_async {
+      if has_bind {
+        // For R = (), the async block is 'static; avoid the AsyncBorrow closure box
+        let is_unit_env = is_unit_type(&env_ty);
+        if is_unit_env {
+          quote! {
+            #path::Effect::new_inline_async(async move {
+              let #r = &mut ();
+              #expanded
+            })
+          }
+        } else {
+          quote! {
+            #path::Effect::new_async(move | #r: &mut #env_ty | {
+              #path::box_future(async move { #expanded })
+            })
+          }
+        }
+      } else if has_await {
+        // Await without binds: no need for env parameter, use new_inline_async
         quote! {
-          #path::Effect::new_async(move | #r: &mut #env_ty | {
-            #path::box_future(async move { #expanded })
-          })
+          #path::Effect::new_inline_async(async move { #expanded })
         }
       } else {
         quote! {
@@ -33,14 +50,23 @@ pub fn expand(kind: EffectKind) -> proc_macro2::TokenStream {
       }
     }
     EffectKind::Bare { body } => {
-      let needs_async =
-        effect_body_contains_bind(body.clone()) || effect_body_contains_await(body.clone());
+      let has_bind = effect_body_contains_bind(body.clone());
+      let has_await = effect_body_contains_await(body.clone());
       let expanded = expand_bare_body(body, &path);
-      if needs_async {
+      if has_bind {
+        // Bare effects have R = (). For bind operands that don't need the env
+        // (like YieldNow, Result, or Effect<(), E, ()>), we can create &mut ()
+        // inside the async block and use new_inline_async, avoiding the closure
+        // allocation in new_async.
         quote! {
-          #path::Effect::new_async(move |__effect_r: &mut ()| {
-            #path::box_future(async move { #expanded })
+          #path::Effect::new_inline_async(async move {
+            let __effect_r = &mut ();
+            #expanded
           })
+        }
+      } else if has_await {
+        quote! {
+          #path::Effect::new_inline_async(async move { #expanded })
         }
       } else {
         quote! {
@@ -53,9 +79,21 @@ pub fn expand(kind: EffectKind) -> proc_macro2::TokenStream {
   }
 }
 
+/// Detect if a type is the unit type `()`.
+fn is_unit_type(ty: &syn::Type) -> bool {
+  matches!(ty, syn::Type::Tuple(t) if t.elems.is_empty())
+}
+
 /// We always use `::id_effect::…` so the generated code resolves in the caller's crate.
 pub fn crate_path() -> proc_macro2::TokenStream {
-  quote!(::id_effect)
+  match crate_name("id_effect") {
+    Ok(FoundCrate::Itself) => quote!(::id_effect),
+    Ok(FoundCrate::Name(name)) => {
+      let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+      quote!(::#ident)
+    }
+    Err(_) => quote!(::id_effect),
+  }
 }
 
 #[cfg(test)]
@@ -68,6 +106,10 @@ mod tests {
     ts.to_string().contains("new_async")
   }
 
+  fn expanded_contains_new_inline_async(ts: &proc_macro2::TokenStream) -> bool {
+    ts.to_string().contains("new_inline_async")
+  }
+
   fn expanded_uses_box_future(ts: &proc_macro2::TokenStream) -> bool {
     ts.to_string().contains("box_future")
   }
@@ -78,7 +120,7 @@ mod tests {
     let kind = parse_effect_input(input).expect("parse");
     let out = expand(kind);
     assert!(
-      !expanded_contains_new_async(&out),
+      !expanded_contains_new_async(&out) && !expanded_contains_new_inline_async(&out),
       "expected Effect::new, got: {out}"
     );
     assert!(
@@ -88,15 +130,22 @@ mod tests {
   }
 
   #[test]
-  fn bind_in_do_notation_uses_new_async() {
-    let input = quote! { |_r: &mut ()| { ~fail::<(), (), ()>(()) } };
+  fn bind_in_bare_effect_uses_new_inline_async() {
+    let input = quote! { ~fail::<(), (), ()>(()) };
     let kind = parse_effect_input(input).expect("parse");
     let out = expand(kind);
     assert!(
-      expanded_contains_new_async(&out),
-      "expected new_async: {out}"
+      expanded_contains_new_inline_async(&out),
+      "expected new_inline_async for bare effect with bind: {out}"
     );
-    assert!(expanded_uses_box_future(&out), "expected box_future: {out}");
+    assert!(
+      !expanded_contains_new_async(&out),
+      "should not use new_async for bare effect: {out}"
+    );
+    assert!(
+      !expanded_uses_box_future(&out),
+      "should not use box_future for bare effect with bind: {out}"
+    );
   }
 
   #[test]
@@ -105,8 +154,27 @@ mod tests {
     let kind = parse_effect_input(input).expect("parse");
     let out = expand(kind);
     assert!(
-      !expanded_contains_new_async(&out),
+      !expanded_contains_new_async(&out) && !expanded_contains_new_inline_async(&out),
       "expected Effect::new: {out}"
+    );
+  }
+
+  #[test]
+  fn await_without_bind_uses_new_inline_async() {
+    let input = quote! { |_r: &mut ()| { foo().await } };
+    let kind = parse_effect_input(input).expect("parse");
+    let out = expand(kind);
+    assert!(
+      expanded_contains_new_inline_async(&out),
+      "expected new_inline_async for await without bind: {out}"
+    );
+    assert!(
+      !expanded_contains_new_async(&out),
+      "should not use new_async when no binds: {out}"
+    );
+    assert!(
+      !expanded_uses_box_future(&out),
+      "new_inline_async should not use box_future: {out}"
     );
   }
 
@@ -120,11 +188,51 @@ mod tests {
   }
 
   #[test]
-  fn top_level_await_forces_new_async_detection() {
+  fn top_level_await_forces_async_detection() {
     use crate::transform::effect_body_contains_await;
     let body = quote! {
       foo().await
     };
     assert!(effect_body_contains_await(body));
+  }
+
+  #[test]
+  fn bind_in_do_notation_with_unit_env_uses_new_inline_async() {
+    // Do-notation with R = () should use new_inline_async, avoiding the closure box
+    let input = quote! { |_r: &mut ()| { ~fail::<(), (), ()>(()) } };
+    let kind = parse_effect_input(input).expect("parse");
+    let out = expand(kind);
+    assert!(
+      expanded_contains_new_inline_async(&out),
+      "expected new_inline_async for do-notation with unit env: {out}"
+    );
+    assert!(
+      !expanded_contains_new_async(&out),
+      "should not use new_async when env is unit: {out}"
+    );
+    assert!(
+      !expanded_uses_box_future(&out),
+      "new_inline_async should not use box_future: {out}"
+    );
+  }
+
+  #[test]
+  fn bind_in_do_notation_with_non_unit_env_uses_new_async() {
+    // Do-notation with R != () should still use new_async
+    let input = quote! { |r: &mut String| { ~fail::<(), (), String>(()) } };
+    let kind = parse_effect_input(input).expect("parse");
+    let out = expand(kind);
+    assert!(
+      expanded_contains_new_async(&out),
+      "expected new_async for do-notation with non-unit env: {out}"
+    );
+    assert!(
+      !expanded_contains_new_inline_async(&out),
+      "should not use new_inline_async when env is non-unit: {out}"
+    );
+    assert!(
+      expanded_uses_box_future(&out),
+      "new_async should use box_future: {out}"
+    );
   }
 }

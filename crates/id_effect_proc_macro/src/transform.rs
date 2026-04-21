@@ -5,7 +5,7 @@
 //! `~expr` is a unary prefix "run-effect" operator — analogous to unary `-`. It expands to:
 //!
 //! ```text
-//! (::id_effect::into_bind(expr, r).await?)
+//! ({ use ::id_effect::IntoBindFastExt as _; (expr).__into_bind_fast(r).await? })
 //! ```
 //!
 //! `~` can appear anywhere a Rust expression can appear: in `let` bindings, conditions,
@@ -17,7 +17,7 @@
 //! tail expression. `~` is expanded recursively in every chunk. The tail is wrapped in
 //! `Result::Ok(...)`. If the body contains no `~`, the proc macro uses `Effect::new` (sync
 //! `FnOnce(&mut R) -> Result<...>`); otherwise it uses `Effect::new_async` with
-//! `Box::pin(async move { ... })` so `.await` on `into_bind` is valid.
+//! `Box::pin(async move { ... })` so `.await` on the hidden bind helper is valid.
 //!
 //! Nested `{ }` blocks have their `~` expanded in-place but are **not** given an additional
 //! `Ok(tail)` wrapper — they are plain Rust blocks, not effect blocks.
@@ -33,7 +33,7 @@
 //! next call group). Method chains that follow belong to the outer expression:
 //!
 //! ```text
-//! ~foo().bar   →   (into_bind(foo(), r).await?).bar
+//! ~foo().bar   →   ({ use ::id_effect::IntoBindFastExt as _; (foo()).__into_bind_fast(r).await? }).bar
 //! ```
 //!
 //! ## Known limitation
@@ -68,7 +68,7 @@ pub fn effect_body_contains_bind(tokens: TokenStream) -> bool {
 /// sync (`Effect::new`). Misclassifying those bodies as async breaks `Send` on streams that close
 /// over non-`Send` effect HTTP futures.
 ///
-/// Top-level `.await` (Drift connect, `into_bind`, etc.) must use [`Effect::new_async`].
+/// Top-level `.await` (Drift connect, `into_bind_fast`, etc.) must use [`Effect::new_async`].
 pub fn effect_body_contains_await(tokens: TokenStream) -> bool {
   fn walk(
     mut iter: std::iter::Peekable<impl Iterator<Item = TokenTree>>,
@@ -136,8 +136,22 @@ pub fn expand_bare_body(body: TokenStream, path: &TokenStream) -> TokenStream {
   expand_block(body, &r, path)
 }
 
+fn fast_bind_await(
+  operand: TokenStream,
+  r: &syn::Ident,
+  path: &TokenStream,
+  propagate_error: bool,
+) -> TokenStream {
+  let await_expr = if propagate_error {
+    quote! { (#operand).__into_bind_fast(#r).await? }
+  } else {
+    quote! { (#operand).__into_bind_fast(#r).await }
+  };
+  quote! {{ use #path::IntoBindFastExt as _; #await_expr }}
+}
+
 /// When the body tail is exactly one `~operand` (after ident-desugar), the async effect body should
-/// return `into_bind(operand, r).await` directly. Wrapping `Ok((into_bind(...).await?))` triggers
+/// return the direct bind await directly. Wrapping `Ok((...await?))` triggers
 /// `clippy::needless_question_mark` (the `?` + outer `Ok` cancel for `Result` tails).
 fn try_expand_tail_as_into_bind_await(
   tail: TokenStream,
@@ -154,7 +168,7 @@ fn try_expand_tail_as_into_bind_await(
     return None;
   }
   let expanded_operand = expand_tilde(operand, r, path);
-  Some(quote! { #path::into_bind(#expanded_operand, #r).await })
+  Some(fast_bind_await(expanded_operand, r, path, false))
 }
 
 /// Split the outermost body on top-level `;`, expand `~` in each chunk, wrap tail in `Ok(...)`.
@@ -214,8 +228,7 @@ fn desugar_ident_tilde_bind(chunk: TokenStream) -> TokenStream {
   }
 }
 
-/// Recursively walk `tokens`, rewriting every `~primary` as
-/// `(::id_effect::into_bind(primary, r).await?)`.
+/// Recursively walk `tokens`, rewriting every `~primary` as a hidden fast bind await.
 ///
 /// Recurses into `{ }`, `( )`, and `[ ]` groups so `~` is expanded at any nesting depth.
 /// Nested groups are **not** given `Ok(tail)` wrapping — that is only for the outermost body.
@@ -231,7 +244,7 @@ fn expand_tilde(tokens: TokenStream, r: &syn::Ident, path: &TokenStream) -> Toke
         let operand = collect_tilde_operand(&mut iter);
         // Recurse so nested `~` inside the operand is also expanded.
         let expanded_operand = expand_tilde(operand, r, path);
-        let bound = quote! { #path::into_bind(#expanded_operand, #r).await? };
+        let bound = fast_bind_await(expanded_operand, r, path, true);
         let group = proc_macro2::Group::new(Delimiter::Parenthesis, bound);
         out.push(TokenTree::Group(group));
       }
@@ -398,7 +411,7 @@ mod tests {
   //! - **Else** — passthrough (not `ident~` at start).
   //!
   //! ## [`expand_tilde`] (prefix `~` anywhere in token tree)
-  //! - **`~`** — replace with `(path::into_bind(operand, r).await?)` (parenthesized group); operand from
+  //! - **`~`** — replace with a hidden fast bind await (parenthesized group); operand from
   //!   [`collect_tilde_operand`]; recurse into operand. The **sole** body tail `~operand` (see
   //!   [`try_expand_tail_as_into_bind_await`]) omits the inner `?` and outer `Ok` so the async block
   //!   returns `Result` directly (avoids `clippy::needless_question_mark`).
@@ -604,7 +617,7 @@ mod tests {
         let path = quote! { ::id_effect };
         let out = expand_bare_body(quote! { k ~ foo ( ) ; 1 }, &path);
         let expected = quote! {
-          let k = (::id_effect::into_bind(foo(), __effect_r).await?) ;
+          let k = ({ use ::id_effect::IntoBindFastExt as _; (foo()).__into_bind_fast(__effect_r).await? }) ;
           ::core::result::Result::Ok(1)
         };
         assert_ts_eq!(out, expected);
@@ -620,13 +633,13 @@ mod tests {
         let path = quote! { ::id_effect };
         let out = expand_bare_body(quote! { k ~ foo ( ) }, &path);
         let expected = quote! {
-          ::core::result::Result::Ok(let k = (::id_effect::into_bind(foo(), __effect_r).await?))
+          ::core::result::Result::Ok(let k = ({ use ::id_effect::IntoBindFastExt as _; (foo()).__into_bind_fast(__effect_r).await? }))
         };
         assert_ts_eq!(out, expected);
       }
     }
 
-    /// Syntax: prefix `~` only on tail — `into_bind(..., __effect_r)`.
+    /// Syntax: prefix `~` only on tail — `into_bind_fast(..., __effect_r)`.
     mod with_prefix_tilde_on_tail_simple_call {
       use super::*;
 
@@ -635,7 +648,7 @@ mod tests {
         let path = quote! { ::id_effect };
         let out = expand_bare_body(quote! { ~ foo ( ) }, &path);
         let expected = quote! {
-          ::id_effect::into_bind(foo(), __effect_r).await
+          { use ::id_effect::IntoBindFastExt as _; (foo()).__into_bind_fast(__effect_r).await }
         };
         assert_ts_eq!(out, expected);
       }
@@ -650,7 +663,7 @@ mod tests {
         let path = quote! { ::id_effect };
         let out = expand_bare_body(quote! { ~ bar :: baz ( ) }, &path);
         let expected = quote! {
-          ::id_effect::into_bind(bar::baz(), __effect_r).await
+          { use ::id_effect::IntoBindFastExt as _; (bar::baz()).__into_bind_fast(__effect_r).await }
         };
         assert_ts_eq!(out, expected);
       }
@@ -660,7 +673,7 @@ mod tests {
         let path = quote! { ::id_effect };
         let out = expand_bare_body(quote! { ~ x }, &path);
         let expected = quote! {
-          ::id_effect::into_bind(x, __effect_r).await
+          { use ::id_effect::IntoBindFastExt as _; (x).__into_bind_fast(__effect_r).await }
         };
         assert_ts_eq!(out, expected);
       }
@@ -678,7 +691,7 @@ mod tests {
           &path,
         );
         let expected = quote! {
-          ::id_effect::into_bind(raw.parse::<i32>().map_err(|e| e), __effect_r).await
+          { use ::id_effect::IntoBindFastExt as _; (raw.parse::<i32>().map_err(|e| e)).__into_bind_fast(__effect_r).await }
         };
         assert_ts_eq!(out, expected);
       }
@@ -693,7 +706,7 @@ mod tests {
         let path = quote! { ::id_effect };
         let r = syn::Ident::new("__effect_r", proc_macro2::Span::call_site());
         let out = expand_tilde(quote! { ( ~ x , y ) }, &r, &path);
-        let expected = quote! { ((::id_effect::into_bind(x, __effect_r).await?), y) };
+        let expected = quote! { (({ use ::id_effect::IntoBindFastExt as _; (x).__into_bind_fast(__effect_r).await? }), y) };
         assert_ts_eq!(out, expected);
       }
     }
@@ -708,7 +721,7 @@ mod tests {
         let r = syn::Ident::new("__effect_r", proc_macro2::Span::call_site());
         let out = expand_tilde(quote! { ~ ~ foo ( ) }, &r, &path);
         let expected = quote! {
-          (::id_effect::into_bind((::id_effect::into_bind(foo(), __effect_r).await?), __effect_r).await?)
+          ({ use ::id_effect::IntoBindFastExt as _; (({ use ::id_effect::IntoBindFastExt as _; (foo()).__into_bind_fast(__effect_r).await? })).__into_bind_fast(__effect_r).await? })
         };
         assert_ts_eq!(out, expected);
       }
@@ -723,7 +736,7 @@ mod tests {
         let path = quote! { ::id_effect };
         let r = syn::Ident::new("__effect_r", proc_macro2::Span::call_site());
         let out = expand_tilde(quote! { { ~ a ( ) } }, &r, &path);
-        let expected = quote! { { (::id_effect::into_bind(a(), __effect_r).await?) } };
+        let expected = quote! { { ({ use ::id_effect::IntoBindFastExt as _; (a()).__into_bind_fast(__effect_r).await? }) } };
         assert_ts_eq!(out, expected);
       }
 
@@ -732,7 +745,7 @@ mod tests {
         let path = quote! { ::id_effect };
         let r = syn::Ident::new("__effect_r", proc_macro2::Span::call_site());
         let out = expand_tilde(quote! { ( ~ b ( ) ) }, &r, &path);
-        let expected = quote! { ((::id_effect::into_bind(b(), __effect_r).await?)) };
+        let expected = quote! { (({ use ::id_effect::IntoBindFastExt as _; (b()).__into_bind_fast(__effect_r).await? })) };
         assert_ts_eq!(out, expected);
       }
 
@@ -741,7 +754,7 @@ mod tests {
         let path = quote! { ::id_effect };
         let r = syn::Ident::new("__effect_r", proc_macro2::Span::call_site());
         let out = expand_tilde(quote! { [ ~ c ( ) ] }, &r, &path);
-        let expected = quote! { [(::id_effect::into_bind(c(), __effect_r).await?)] };
+        let expected = quote! { [({ use ::id_effect::IntoBindFastExt as _; (c()).__into_bind_fast(__effect_r).await? })] };
         assert_ts_eq!(out, expected);
       }
     }
@@ -755,7 +768,7 @@ mod tests {
         let path = quote! { ::my_effect };
         let out = expand_bare_body(quote! { ~ z ( ) }, &path);
         let expected = quote! {
-          ::my_effect::into_bind(z(), __effect_r).await
+          { use ::my_effect::IntoBindFastExt as _; (z()).__into_bind_fast(__effect_r).await }
         };
         assert_ts_eq!(out, expected);
       }
@@ -771,7 +784,7 @@ mod tests {
         let path = quote! { ::id_effect };
         let out = expand_bare_body(quote! { ~ v :: < u8 > > ( ) }, &path);
         let expected = quote! {
-          ::core::result::Result::Ok((::id_effect::into_bind(v::<u8>, __effect_r).await?) > ())
+          ::core::result::Result::Ok(({ use ::id_effect::IntoBindFastExt as _; (v::<u8>).__into_bind_fast(__effect_r).await? }) > ())
         };
         assert_ts_eq!(out, expected);
       }
@@ -788,7 +801,7 @@ mod tests {
         let path = quote! { ::id_effect };
         let out = expand_bare_body(quote! { if cond { ~ f ( ) ; } A :: default ( ) }, &path);
         let expected = quote! {
-          if cond { (::id_effect::into_bind(f(), __effect_r).await?) ; } ;
+          if cond { ({ use ::id_effect::IntoBindFastExt as _; (f()).__into_bind_fast(__effect_r).await? }) ; } ;
           ::core::result::Result::Ok(A :: default ())
         };
         assert_ts_eq!(out, expected);
@@ -804,8 +817,8 @@ mod tests {
         );
         let expected = quote! {
           if n < 2 {
-            (::id_effect::into_bind(log_warn("msg"), __effect_r).await?) ;
-            (::id_effect::into_bind(fail(err), __effect_r).await?) ;
+            ({ use ::id_effect::IntoBindFastExt as _; (log_warn("msg")).__into_bind_fast(__effect_r).await? }) ;
+            ({ use ::id_effect::IntoBindFastExt as _; (fail(err)).__into_bind_fast(__effect_r).await? }) ;
           } ;
           ::core::result::Result::Ok(A :: default ())
         };
@@ -820,7 +833,7 @@ mod tests {
   mod expand_closure_body {
     use super::*;
 
-    /// Same as bare empty body but `into_bind(..., r)` must use the given ident, not `__effect_r`.
+    /// Same as bare empty body but `into_bind_fast(..., r)` must use the given ident, not `__effect_r`.
     mod with_empty_body {
       use super::*;
 
@@ -875,7 +888,7 @@ mod tests {
         let r = r_custom();
         let out = expand_closure_body(quote! { ~ g ( ) }, &r, &path);
         let expected = quote! {
-          ::id_effect::into_bind(g(), my_r).await
+          { use ::id_effect::IntoBindFastExt as _; (g()).__into_bind_fast(my_r).await }
         };
         assert_ts_eq!(out, expected);
       }
@@ -1249,7 +1262,7 @@ mod tests {
         let r = r_env();
         let path = path_effect();
         let out = expand_tilde(quote! { ~ foo ( ) }, &r, &path);
-        let expected = quote! { (::id_effect::into_bind(foo(), r_env).await?) };
+        let expected = quote! { ({ use ::id_effect::IntoBindFastExt as _; (foo()).__into_bind_fast(r_env).await? }) };
         assert_ts_eq!(out, expected);
       }
     }
@@ -1265,7 +1278,7 @@ mod tests {
         // `;` is not an operand boundary for `collect_tilde_operand`; `,` at depth 0 is.
         let out = expand_tilde(quote! { ~ f ( ) , ~ g ( ) }, &r, &path);
         let expected = quote! {
-          (::id_effect::into_bind(f(), r_env).await?) , (::id_effect::into_bind(g(), r_env).await?)
+          ({ use ::id_effect::IntoBindFastExt as _; (f()).__into_bind_fast(r_env).await? }) , ({ use ::id_effect::IntoBindFastExt as _; (g()).__into_bind_fast(r_env).await? })
         };
         assert_ts_eq!(out, expected);
       }
@@ -1282,7 +1295,7 @@ mod tests {
         let path = path_effect();
         let out = expand_tilde(quote! { { ~ f ( ) ; ~ g ( ) } }, &r, &path);
         let expected = quote! {
-          { (::id_effect::into_bind(f(), r_env).await?) ; (::id_effect::into_bind(g(), r_env).await?) }
+          { ({ use ::id_effect::IntoBindFastExt as _; (f()).__into_bind_fast(r_env).await? }) ; ({ use ::id_effect::IntoBindFastExt as _; (g()).__into_bind_fast(r_env).await? }) }
         };
         assert_ts_eq!(out, expected);
       }
@@ -1297,7 +1310,7 @@ mod tests {
         let r = r_env();
         let path = path_effect();
         let out = expand_tilde(quote! { { ~ a ( ) } }, &r, &path);
-        let expected = quote! { { (::id_effect::into_bind(a(), r_env).await?) } };
+        let expected = quote! { { ({ use ::id_effect::IntoBindFastExt as _; (a()).__into_bind_fast(r_env).await? }) } };
         assert_ts_eq!(out, expected);
       }
     }
@@ -1311,7 +1324,7 @@ mod tests {
         let r = r_env();
         let path = path_effect();
         let out = expand_tilde(quote! { ( ~ b ( ) ) }, &r, &path);
-        let expected = quote! { ((::id_effect::into_bind(b(), r_env).await?)) };
+        let expected = quote! { (({ use ::id_effect::IntoBindFastExt as _; (b()).__into_bind_fast(r_env).await? })) };
         assert_ts_eq!(out, expected);
       }
     }
@@ -1325,7 +1338,7 @@ mod tests {
         let r = r_env();
         let path = path_effect();
         let out = expand_tilde(quote! { [ ~ c ( ) ] }, &r, &path);
-        let expected = quote! { [(::id_effect::into_bind(c(), r_env).await?)] };
+        let expected = quote! { [({ use ::id_effect::IntoBindFastExt as _; (c()).__into_bind_fast(r_env).await? })] };
         assert_ts_eq!(out, expected);
       }
     }
@@ -1340,7 +1353,7 @@ mod tests {
         let path = path_effect();
         let out = expand_tilde(quote! { { ~ u ( ) , ~ v ( ) } }, &r, &path);
         let expected = quote! {
-          { (::id_effect::into_bind(u(), r_env).await?) , (::id_effect::into_bind(v(), r_env).await?) }
+          { ({ use ::id_effect::IntoBindFastExt as _; (u()).__into_bind_fast(r_env).await? }) , ({ use ::id_effect::IntoBindFastExt as _; (v()).__into_bind_fast(r_env).await? }) }
         };
         assert_ts_eq!(out, expected);
       }

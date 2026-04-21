@@ -90,11 +90,13 @@ impl Runtime for ThreadSleepRuntime {
   }
 
   fn yield_now(&self) -> Effect<(), Never, ()> {
-    Effect::new(move |_env| {
-      std::thread::yield_now();
-      Ok::<(), Never>(())
-    })
+    Effect::new_fn(thread_sleep_yield_now)
   }
+}
+
+fn thread_sleep_yield_now(_env: &mut ()) -> Result<(), Never> {
+  std::thread::yield_now();
+  Ok::<(), Never>(())
 }
 
 /// Spawn a fiber using `runtime` (delegates to [`Runtime::spawn_with`]).

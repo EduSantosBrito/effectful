@@ -28,8 +28,9 @@
 use core::convert::Infallible;
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::future::ready;
 use std::sync::Arc;
+
+use std::future::ready;
 
 use ::id_effect::{BoxFuture, Effect, EffectHashMap, FiberRef, Get, Here, IntoBind, box_future};
 

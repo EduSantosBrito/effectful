@@ -14,8 +14,13 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
+
+use pin_project_lite::pin_project;
 
 use id_effect::{Effect, FiberHandle, FiberId, Never, Runtime, from_async};
 
@@ -130,11 +135,58 @@ impl Runtime for TokioRuntime {
 
   #[inline(always)]
   fn yield_now(&self) -> Effect<(), Never, ()> {
-    from_async(move |_env| async move {
-      tokio::task::yield_now().await;
-      Ok::<(), Never>(())
-    })
+    Effect::new_static_async_fn(tokio_yield_now_effect)
   }
+}
+
+impl TokioRuntime {
+  /// Fast-path yield that bypasses `BoxFuture` allocation.
+  #[inline(always)]
+  pub fn yield_now_fast(&self) -> YieldNow {
+    YieldNow
+  }
+}
+
+pin_project! {
+  struct YieldNowEffect<F> {
+    #[pin]
+    inner: F,
+  }
+}
+
+impl<F> YieldNowEffect<F>
+where
+  F: Future<Output = ()>,
+{
+  #[inline(always)]
+  fn new(inner: F) -> Self {
+    Self { inner }
+  }
+}
+
+impl<F> Future for YieldNowEffect<F>
+where
+  F: Future<Output = ()>,
+{
+  type Output = Result<(), Never>;
+
+  #[inline(always)]
+  fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    self.project().inner.poll(cx).map(|_| Ok(()))
+  }
+}
+
+/// Zero-allocation yield token for use in `effect!` macros.
+pub struct YieldNow;
+
+impl<'a> id_effect::IntoBindFastExt<'a, (), (), Never> for YieldNow {
+  fn __into_bind_fast(self, _r: &'a mut ()) -> impl Future<Output = Result<(), Never>> + 'a {
+    YieldNowEffect::new(tokio::task::yield_now())
+  }
+}
+
+fn tokio_yield_now_effect(_env: &mut ()) -> id_effect::BoxFuture<'static, Result<(), Never>> {
+  id_effect::box_future(YieldNowEffect::new(tokio::task::yield_now()))
 }
 
 #[inline]

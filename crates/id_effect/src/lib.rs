@@ -77,8 +77,8 @@ pub mod streaming;
 pub mod testing;
 
 pub use crate::kernel::{
-  BoxFuture, Effect, IntoBind, acquire_release, box_future, fail, from_async, into_bind, pure,
-  scope_with, scoped, succeed,
+  BoxFuture, Effect, IntoBind, IntoBindFastExt, acquire_release, box_future, fail, from_async,
+  into_bind, into_bind_fast, pure, scope_with, scoped, succeed,
 };
 pub use collections::{
   ChunkBuilder, EffectHashMap, EffectHashSet, EffectSortedMap, EffectSortedSet, EffectVector,

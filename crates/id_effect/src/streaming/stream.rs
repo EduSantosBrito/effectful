@@ -399,7 +399,7 @@ where
   /// Eagerly runs `effect` to obtain all elements (same shape as [`Stream::new`]).
   #[inline]
   pub fn from_effect(effect: Effect<Vec<A>, E, R>) -> Self {
-    Self::new(move |r| effect.run(r))
+    Self::new(move |r| effect.run_boxed(r))
   }
 
   /// Any [`Channel`](crate::coordination::channel::Channel) as an output [`Stream`] (Wave 7).

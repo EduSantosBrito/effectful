@@ -35,10 +35,9 @@
 //! - Uses: [`Bifunctor`](super::super::algebra::bifunctor) — error mapping
 
 use core::convert::Infallible;
-use core::future::{Future, poll_fn, ready};
+use core::future::{Future, ready};
 use core::marker::PhantomData;
 use core::pin::Pin;
-use core::task::{Context as TaskContext, Poll};
 
 use crate::context::{Cons, Context, Nil};
 use crate::failure::exit::Exit;
@@ -120,194 +119,78 @@ where
   fut
 }
 
-// ── EffectRunFuture ─────────────────────────────────────────────────────────
-
-/// Internal state for [`EffectRunFuture`].
-///
-/// Optimized to avoid unnecessary allocations:
-/// - `Ready`: zero-allocation for sync effects
-/// - `PollFn`: stores hand-written pollers directly (avoids `poll_fn` + `BoxFuture` wrapper)
-/// - `Borrow`: defers `AsyncBorrowOp` evaluation until first poll (lazy init)
-/// - `AsyncStatic`: stores existing `BoxFuture` directly
-enum EffectRunState<'a, A, E>
+#[inline(always)]
+fn flat_map_static_future<'a, A, B, E, R, H>(
+  fut: BoxFuture<'static, Result<A, E>>,
+  r: &'a mut R,
+  h: H,
+) -> BoxFuture<'a, Result<B, E>>
 where
-  A: 'static,
+  A: 'a,
+  B: 'static,
   E: 'static,
+  R: 'static,
+  H: FnOnce(A) -> Effect<B, E, R> + 'a,
 {
-  Ready(Result<A, E>),
-  /// Direct poller storage, avoiding `poll_fn` + `BoxFuture` wrapper.
-  /// The environment is captured in the closure at construction time.
-  PollFn(Box<dyn FnMut(&mut TaskContext<'_>) -> Poll<Result<A, E>> + 'a>),
-  /// Deferred async borrow: stores the op closure and evaluates it on first poll.
-  /// This avoids allocating the `BoxFuture` if the effect is never polled.
-  Borrow(Box<dyn FnOnce() -> BoxFuture<'a, Result<A, E>> + 'a>),
-  AsyncStatic(BoxFuture<'a, Result<A, E>>),
-}
-
-/// Concrete future returned by [`Effect::run`].
-///
-/// Avoids heap allocation for sync effects (returns `Poll::Ready` immediately).
-/// For async effects, stores the inner [`BoxFuture`] directly without an additional
-/// outer box wrapper.
-pub struct EffectRunFuture<'a, A, E>
-where
-  A: 'static,
-  E: 'static,
-{
-  state: Option<EffectRunState<'a, A, E>>,
-}
-
-impl<'a, A, E> EffectRunFuture<'a, A, E>
-where
-  A: 'static,
-  E: 'static,
-{
-  #[inline]
-  fn new<R: 'static>(step: SyncStep<A, E, R>, env: &'a mut R) -> Self {
-    let state = match step {
-      SyncStep::Ready(output) => EffectRunState::Ready(output),
-      SyncStep::AsyncStatic(fut) => EffectRunState::AsyncStatic(static_future(fut)),
-      SyncStep::AsyncBorrow(f) => {
-        // Deferred evaluation: store the op and env, create BoxFuture on first poll
-        EffectRunState::Borrow(Box::new(move || start_async_operation(f, env)))
-      }
-      SyncStep::AsyncPoll(mut poller) => {
-        // Direct poller storage: avoid poll_fn + box_future wrapper
-        EffectRunState::PollFn(Box::new(move |cx| poller(env, cx)))
-      }
-    };
-    Self {
-      state: Some(state),
-    }
+  enum State<'a, A, B, E, R, H>
+  where
+    B: 'static,
+    E: 'static,
+    R: 'static,
+    H: FnOnce(A) -> Effect<B, E, R> + 'a,
+  {
+    First {
+      fut: BoxFuture<'static, Result<A, E>>,
+      r: Option<&'a mut R>,
+      h: Option<H>,
+    },
+    Second {
+      fut: BoxFuture<'a, Result<B, E>>,
+    },
+    Done,
   }
-}
 
-impl<'a, A, E> Unpin for EffectRunFuture<'a, A, E>
-where
-  A: 'static,
-  E: 'static,
-{
-}
+  let mut state = State::First {
+    fut,
+    r: Some(r),
+    h: Some(h),
+  };
 
-impl<'a, A, E> Future for EffectRunFuture<'a, A, E>
-where
-  A: 'static,
-  E: 'static,
-{
-  type Output = Result<A, E>;
-
-  fn poll(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
-    let this = self.get_mut();
+  box_future(core::future::poll_fn(move |cx| {
     loop {
-      match this.state.take() {
-        Some(EffectRunState::Ready(output)) => return Poll::Ready(output),
-        Some(EffectRunState::PollFn(mut poller)) => {
-          match poller(cx) {
-            Poll::Ready(output) => return Poll::Ready(output),
-            Poll::Pending => {
-              this.state = Some(EffectRunState::PollFn(poller));
-              return Poll::Pending;
+      state = match core::mem::replace(&mut state, State::Done) {
+        State::First { mut fut, mut r, h } => match fut.as_mut().poll(cx) {
+          core::task::Poll::Pending => State::First { fut, r, h },
+          core::task::Poll::Ready(Err(e)) => return core::task::Poll::Ready(Err(e)),
+          core::task::Poll::Ready(Ok(a)) => {
+            let h = match h {
+              Some(h) => h,
+              None => panic!("flat_map continuation missing"),
+            };
+            let r = match r.take() {
+              Some(r) => r,
+              None => panic!("flat_map future lost environment"),
+            };
+            match start_effect(h(a), r) {
+              SyncStep::Ready(output) => return core::task::Poll::Ready(output),
+              SyncStep::AsyncBorrow(next) => State::Second {
+                fut: start_async_operation(next, r),
+              },
+              SyncStep::AsyncStatic(next) => State::Second {
+                fut: static_future(start_static_async_operation(next, r)),
+              },
             }
           }
-        }
-        Some(EffectRunState::Borrow(init)) => {
-          // Evaluate the deferred borrow on first poll
-          let fut = init();
-          this.state = Some(EffectRunState::AsyncStatic(fut));
-          continue; // re-poll immediately with the new state
-        }
-        Some(EffectRunState::AsyncStatic(mut fut)) => {
-          match Pin::new(&mut fut).poll(cx) {
-            Poll::Ready(output) => return Poll::Ready(output),
-            Poll::Pending => {
-              this.state = Some(EffectRunState::AsyncStatic(fut));
-              return Poll::Pending;
-            }
-          }
-        }
-        None => panic!("EffectRunFuture polled after completion"),
-      }
+        },
+        State::Second { mut fut } => match fut.as_mut().poll(cx) {
+          core::task::Poll::Pending => State::Second { fut },
+          core::task::Poll::Ready(output) => return core::task::Poll::Ready(output),
+        },
+        State::Done => panic!("flat_map static future polled after completion"),
+      };
     }
-  }
+  }))
 }
-
-// ── FastBindFuture ──────────────────────────────────────────────────────────
-
-/// Hidden fast-path future for macro-generated binds.
-///
-/// For sync effects (`succeed`, `fail`, etc.), returns `Ready` immediately
-/// with a smaller stack footprint than [`EffectRunFuture`].
-/// For async effects, delegates to [`EffectRunFuture`].
-#[doc(hidden)]
-pub struct FastBindFuture<'a, A, E>
-where
-  A: 'static,
-  E: 'static,
-{
-  inner: Option<FastBindFutureInner<'a, A, E>>,
-}
-
-enum FastBindFutureInner<'a, A, E>
-where
-  A: 'static,
-  E: 'static,
-{
-  Ready(Result<A, E>),
-  Running(EffectRunFuture<'a, A, E>),
-}
-
-impl<'a, A, E> FastBindFuture<'a, A, E>
-where
-  A: 'static,
-  E: 'static,
-{
-  #[inline]
-  fn ready(output: Result<A, E>) -> Self {
-    Self {
-      inner: Some(FastBindFutureInner::Ready(output)),
-    }
-  }
-
-  #[inline]
-  fn running(fut: EffectRunFuture<'a, A, E>) -> Self {
-    Self {
-      inner: Some(FastBindFutureInner::Running(fut)),
-    }
-  }
-}
-
-impl<'a, A, E> Unpin for FastBindFuture<'a, A, E>
-where
-  A: 'static,
-  E: 'static,
-{
-}
-
-impl<'a, A, E> Future for FastBindFuture<'a, A, E>
-where
-  A: 'static,
-  E: 'static,
-{
-  type Output = Result<A, E>;
-
-  #[inline]
-  fn poll(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
-    let this = self.get_mut();
-    match this.inner.take() {
-      Some(FastBindFutureInner::Ready(output)) => Poll::Ready(output),
-      Some(FastBindFutureInner::Running(mut fut)) => {
-        let res = Pin::new(&mut fut).poll(cx);
-        if res.is_pending() {
-          this.inner = Some(FastBindFutureInner::Running(fut));
-        }
-        res
-      }
-      None => panic!("FastBindFuture polled after completion"),
-    }
-  }
-}
-
-// ── IntoBind ────────────────────────────────────────────────────────────────
 
 // ── IntoBind ────────────────────────────────────────────────────────────────
 
@@ -315,25 +198,6 @@ where
 pub trait IntoBind<'a, R, A, E> {
   /// Turns `self` into a boxed future given the environment `r`.
   fn into_bind(self, r: &'a mut R) -> BoxFuture<'a, Result<A, E>>;
-}
-
-/// Hidden extension trait used by `effect!` to prefer a cheaper bind path for concrete [`Effect`]s.
-#[doc(hidden)]
-pub trait IntoBindFastExt<'a, R, A, E> {
-  /// Run a bindable value inside macro-lowered async code.
-  fn __into_bind_fast(self, r: &'a mut R) -> impl Future<Output = Result<A, E>> + 'a;
-}
-
-impl<'a, R, A, E, T> IntoBindFastExt<'a, R, A, E> for T
-where
-  A: 'a,
-  E: 'a,
-  T: IntoBind<'a, R, A, E>,
-{
-  #[inline(always)]
-  fn __into_bind_fast(self, r: &'a mut R) -> impl Future<Output = Result<A, E>> + 'a {
-    self.into_bind(r)
-  }
 }
 
 impl<'a, R, A, E> IntoBind<'a, R, A, E> for Effect<A, E, R>
@@ -345,7 +209,7 @@ where
   /// Runs this effect against `r`.
   #[inline]
   fn into_bind(self, r: &'a mut R) -> BoxFuture<'a, Result<A, E>> {
-    self.run_boxed(r)
+    self.run(r)
   }
 }
 
@@ -375,24 +239,11 @@ pub fn into_bind<'a, R, A, E, T: IntoBind<'a, R, A, E>>(
   t.into_bind(r)
 }
 
-#[doc(hidden)]
-#[inline]
-pub fn into_bind_fast<'a, R, A, E, T: IntoBind<'a, R, A, E>>(
-  t: T,
-  r: &'a mut R,
-) -> BoxFuture<'a, Result<A, E>> {
-  t.into_bind(r)
-}
-
 // ── EffectOp (Internal) ─────────────────────────────────────────────────────
 
 type SyncOp<A, E, R> = Box<dyn FnOnce(&mut R) -> SyncStep<A, E, R>>;
 type AsyncBorrowOp<A, E, R> = Box<dyn for<'a> FnOnce(&'a mut R) -> BoxFuture<'a, Result<A, E>>>;
 type AsyncStaticOp<A, E, R> = Box<dyn FnOnce(&mut R) -> BoxFuture<'static, Result<A, E>>>;
-type AsyncPollOp<A, E, R> = Box<dyn FnMut(&mut R, &mut TaskContext<'_>) -> Poll<Result<A, E>>>;
-type AsyncPollFactory<A, E, R> = Box<dyn FnOnce(&mut R) -> AsyncPollOp<A, E, R>>;
-type SyncFnOp<A, E, R> = fn(&mut R) -> Result<A, E>;
-type AsyncStaticFnOp<A, E, R> = fn(&mut R) -> BoxFuture<'static, Result<A, E>>;
 
 pub(crate) enum SyncStep<A, E, R>
 where
@@ -401,8 +252,7 @@ where
 {
   Ready(Result<A, E>),
   AsyncBorrow(AsyncBorrowOp<A, E, R>),
-  AsyncStatic(BoxFuture<'static, Result<A, E>>),
-  AsyncPoll(AsyncPollOp<A, E, R>),
+  AsyncStatic(AsyncStaticOp<A, E, R>),
 }
 
 pub(crate) enum EffectOp<A, E, R>
@@ -411,13 +261,9 @@ where
   E: 'static,
   R: 'static,
 {
-  SyncFn(SyncFnOp<A, E, R>),
   Sync(SyncOp<A, E, R>),
   AsyncBorrow(AsyncBorrowOp<A, E, R>),
-  AsyncStaticFn(AsyncStaticFnOp<A, E, R>),
   AsyncStatic(AsyncStaticOp<A, E, R>),
-  AsyncInline(BoxFuture<'static, Result<A, E>>),
-  AsyncPoll(AsyncPollFactory<A, E, R>),
 }
 
 trait ProgramOp<A, E, R>
@@ -462,18 +308,16 @@ where
 }
 
 #[inline(always)]
-fn step_into_bind_future<'a, A, E, R>(step: SyncStep<A, E, R>, r: &'a mut R) -> BoxFuture<'a, Result<A, E>>
+pub(crate) fn start_static_async_operation<A, E, R>(
+  op: AsyncStaticOp<A, E, R>,
+  r: &mut R,
+) -> BoxFuture<'static, Result<A, E>>
 where
   A: 'static,
   E: 'static,
   R: 'static,
 {
-  match step {
-    SyncStep::Ready(output) => box_future(ready(output)),
-    SyncStep::AsyncBorrow(f) => start_async_operation(f, r),
-    SyncStep::AsyncStatic(fut) => static_future(fut),
-    SyncStep::AsyncPoll(mut poller) => box_future(poll_fn(move |cx| poller(r, cx))),
-  }
+  op(r)
 }
 
 #[inline(always)]
@@ -484,26 +328,9 @@ where
   R: 'static,
 {
   match op {
-    EffectOp::SyncFn(f) => ready_step(f(r)),
     EffectOp::Sync(f) => f(r),
     EffectOp::AsyncBorrow(f) => SyncStep::AsyncBorrow(f),
-    EffectOp::AsyncStaticFn(f) => SyncStep::AsyncStatic(f(r)),
-    EffectOp::AsyncStatic(f) => SyncStep::AsyncStatic(f(r)),
-    EffectOp::AsyncInline(fut) => SyncStep::AsyncStatic(fut),
-    EffectOp::AsyncPoll(f) => SyncStep::AsyncPoll(f(r)),
-  }
-}
-
-#[inline(always)]
-fn start_repr<A, E, R>(repr: EffectRepr<A, E, R>, r: &mut R) -> SyncStep<A, E, R>
-where
-  A: 'static,
-  E: 'static,
-  R: 'static,
-{
-  match repr {
-    EffectRepr::Leaf(op) => start_operation(op, r),
-    EffectRepr::Program(program) => program.start(r),
+    EffectOp::AsyncStatic(f) => SyncStep::AsyncStatic(f),
   }
 }
 
@@ -514,7 +341,26 @@ where
   E: 'static,
   R: 'static,
 {
-  start_repr(effect.repr, r)
+  match effect.repr {
+    EffectRepr::Leaf(op) => start_operation(op, r),
+    EffectRepr::Program(program) => program.start(r),
+  }
+}
+
+#[inline(always)]
+fn run_effect_async<A, E, R>(effect: Effect<A, E, R>, r: &mut R) -> impl Future<Output = Result<A, E>> + '_
+where
+  A: 'static,
+  E: 'static,
+  R: 'static,
+{
+  async move {
+    match start_effect(effect, r) {
+      SyncStep::Ready(output) => output,
+      SyncStep::AsyncBorrow(f) => start_async_operation(f, r).await,
+      SyncStep::AsyncStatic(f) => start_static_async_operation(f, r).await,
+    }
+  }
 }
 
 // ── Effect ──────────────────────────────────────────────────────────────────
@@ -581,16 +427,6 @@ where
     Self::new_step(move |r| ready_step(f(r)))
   }
 
-  #[doc(hidden)]
-  /// Create a sync effect from a plain function pointer, avoiding a boxed closure.
-  #[inline]
-  pub fn new_fn(f: fn(&mut R) -> Result<A, E>) -> Self {
-    Self {
-      repr: EffectRepr::Leaf(EffectOp::SyncFn(f)),
-      _pd: PhantomData,
-    }
-  }
-
   /// Create an effect from an asynchronous computation.
   ///
   /// The closure returns a [`BoxFuture`] that may borrow `&mut R`.
@@ -605,34 +441,6 @@ where
     }
   }
 
-  /// Create an effect directly from a static future, avoiding the closure allocation.
-  ///
-  /// This is more efficient than [`Self::new_async`] for cases where the future does not
-  /// need to borrow the environment, as it eliminates one boxed closure layer.
-  #[inline]
-  pub fn new_inline_async<Fut>(fut: Fut) -> Self
-  where
-    Fut: Future<Output = Result<A, E>> + 'static,
-  {
-    Self {
-      repr: EffectRepr::Leaf(EffectOp::AsyncInline(box_future(fut))),
-      _pd: PhantomData,
-    }
-  }
-
-  #[doc(hidden)]
-  #[inline]
-  pub fn new_poll<F, P>(f: F) -> Self
-  where
-    F: FnOnce(&mut R) -> P + 'static,
-    P: FnMut(&mut R, &mut TaskContext<'_>) -> Poll<Result<A, E>> + 'static,
-  {
-    Self {
-      repr: EffectRepr::Leaf(EffectOp::AsyncPoll(Box::new(move |r| Box::new(f(r))))),
-      _pd: PhantomData,
-    }
-  }
-
   #[inline]
   fn new_static_async<F>(f: F) -> Self
   where
@@ -640,16 +448,6 @@ where
   {
     Self {
       repr: EffectRepr::Leaf(EffectOp::AsyncStatic(Box::new(f))),
-      _pd: PhantomData,
-    }
-  }
-
-  #[doc(hidden)]
-  /// Create a `'static` async effect from a plain function pointer, avoiding a boxed closure.
-  #[inline]
-  pub fn new_static_async_fn(f: fn(&mut R) -> BoxFuture<'static, Result<A, E>>) -> Self {
-    Self {
-      repr: EffectRepr::Leaf(EffectOp::AsyncStaticFn(f)),
       _pd: PhantomData,
     }
   }
@@ -671,33 +469,11 @@ where
   ///
   /// Consumes the effect (each effect runs at most once).
   #[inline]
-  pub fn run<'a>(self, r: &'a mut R) -> EffectRunFuture<'a, A, E> {
-    EffectRunFuture::new(start_effect(self, r), r)
-  }
-
-  /// Run this effect and return a boxed future (legacy API).
-  ///
-  /// Prefer [`Self::run`] which returns a concrete future with zero allocation for sync effects.
-  #[inline]
-  pub fn run_boxed<'a>(self, r: &'a mut R) -> BoxFuture<'a, Result<A, E>> {
+  pub fn run<'a>(self, r: &'a mut R) -> BoxFuture<'a, Result<A, E>> {
     match start_effect(self, r) {
       SyncStep::Ready(output) => box_future(ready(output)),
       SyncStep::AsyncBorrow(f) => start_async_operation(f, r),
-      SyncStep::AsyncStatic(fut) => static_future(fut),
-      SyncStep::AsyncPoll(mut poller) => box_future(poll_fn(move |cx| poller(r, cx))),
-    }
-  }
-
-  /// Hidden fast bind entrypoint used by `effect!` for concrete [`Effect`] operands.
-  ///
-  /// Returns [`FastBindFuture`] which is smaller than [`EffectRunFuture`] for sync
-  /// effects (the common case in macro binds).
-  #[doc(hidden)]
-  #[inline(always)]
-  pub fn __into_bind_fast<'a>(self, r: &'a mut R) -> FastBindFuture<'a, A, E> {
-    match start_effect(self, r) {
-      SyncStep::Ready(output) => FastBindFuture::ready(output),
-      step => FastBindFuture::running(EffectRunFuture::new(step, r)),
+      SyncStep::AsyncStatic(f) => static_future(start_static_async_operation(f, r)),
     }
   }
 
@@ -723,45 +499,13 @@ where
   {
     match self.repr {
       EffectRepr::Leaf(EffectOp::AsyncBorrow(f)) => Effect::new_async(move |r| {
-        box_future(async move {
-          let output = start_async_operation(f, r).await;
-          output.map(g)
-        })
-      }),
-      EffectRepr::Leaf(EffectOp::AsyncStaticFn(f)) => Effect::new_static_async(move |r| {
-        let fut = f(r);
-        box_future(async move {
-          let output = fut.await;
-          output.map(g)
-        })
-      }),
-      EffectRepr::Leaf(EffectOp::AsyncPoll(f)) => Effect::new_poll(move |r| {
-        let mut next = f(r);
-        let mut g = Some(g);
-        move |r, cx| match next(r, cx) {
-          Poll::Ready(output) => {
-            let g = match g.take() {
-              Some(g) => g,
-              None => panic!("mapped poll effect polled after completion"),
-            };
-            Poll::Ready(output.map(g))
-          }
-          Poll::Pending => Poll::Pending,
-        }
+        map_result_future(start_async_operation(f, r), move |output| output.map(g))
       }),
       EffectRepr::Leaf(EffectOp::AsyncStatic(f)) => Effect::new_static_async(move |r| {
-        let fut = f(r);
-        box_future(async move {
-          let output = fut.await;
-          output.map(g)
-        })
-      }),
-      EffectRepr::Leaf(EffectOp::AsyncInline(fut)) => Effect::new_inline_async(async move {
-        let output = fut.await;
-        output.map(g)
+        map_result_future(start_static_async_operation(f, r), move |output| output.map(g))
       }),
       repr => Effect::new_program(MapProgram {
-        source: repr,
+        source: Effect::from_repr(repr),
         f: g,
       }),
     }
@@ -795,35 +539,15 @@ where
       EffectRepr::Leaf(EffectOp::AsyncBorrow(f)) => Effect::new_async(move |r| {
         box_future(async move {
           let a = start_async_operation(f, r).await?;
-          step_into_bind_future(start_effect(h(a), r), r).await
-        })
-      }),
-      EffectRepr::Leaf(EffectOp::AsyncStaticFn(f)) => Effect::new_async(move |r| {
-        box_future(async move {
-          let a = f(r).await?;
-          step_into_bind_future(start_effect(h(a), r), r).await
-        })
-      }),
-      EffectRepr::Leaf(EffectOp::AsyncPoll(f)) => Effect::new_async(move |r| {
-        box_future(async move {
-          let a = step_into_bind_future(SyncStep::AsyncPoll(f(r)), r).await?;
-          step_into_bind_future(start_effect(h(a), r), r).await
+          run_effect_async(h(a), r).await
         })
       }),
       EffectRepr::Leaf(EffectOp::AsyncStatic(f)) => Effect::new_async(move |r| {
-        box_future(async move {
-          let a = f(r).await?;
-          step_into_bind_future(start_effect(h(a), r), r).await
-        })
-      }),
-      EffectRepr::Leaf(EffectOp::AsyncInline(fut)) => Effect::new_async(move |r| {
-        box_future(async move {
-          let a = fut.await?;
-          step_into_bind_future(start_effect(h(a), r), r).await
-        })
+        let fut = start_static_async_operation(f, r);
+        flat_map_static_future(fut, r, h)
       }),
       repr => Effect::new_program(FlatMapProgram {
-        source: repr,
+        source: Effect::from_repr(repr),
         f: h,
       }),
     }
@@ -852,7 +576,6 @@ where
   {
     match self.repr {
       EffectRepr::Leaf(op) => match op {
-        EffectOp::SyncFn(f) => Effect::new(move |r| f(r).map_err(h)),
         EffectOp::Sync(f) => Effect::new_step(move |r| match f(r) {
           SyncStep::Ready(Ok(a)) => ready_step(Ok(a)),
           SyncStep::Ready(Err(e)) => ready_step(Err(h(e))),
@@ -861,56 +584,25 @@ where
               output.map_err(h)
             })
           })),
-          SyncStep::AsyncPoll(mut next) => {
-            let mut h = Some(h);
-            SyncStep::AsyncPoll(Box::new(move |r, cx| match next(r, cx) {
-              Poll::Ready(output) => {
-                let h = match h.take() {
-                  Some(h) => h,
-                  None => panic!("mapped poll effect polled after completion"),
-                };
-                Poll::Ready(output.map_err(h))
-              }
-              Poll::Pending => Poll::Pending,
-            }))
-          }
-          SyncStep::AsyncStatic(next) => SyncStep::AsyncStatic(map_result_future(next, move |output| {
-            output.map_err(h)
+          SyncStep::AsyncStatic(next) => SyncStep::AsyncStatic(Box::new(move |r| {
+            map_result_future(start_static_async_operation(next, r), move |output| {
+              output.map_err(h)
+            })
           })),
-        }),
-        EffectOp::AsyncPoll(f) => Effect::new_poll(move |r| {
-          let mut next = f(r);
-          let mut h = Some(h);
-          move |r, cx| match next(r, cx) {
-            Poll::Ready(output) => {
-              let h = match h.take() {
-                Some(h) => h,
-                None => panic!("mapped poll effect polled after completion"),
-              };
-              Poll::Ready(output.map_err(h))
-            }
-            Poll::Pending => Poll::Pending,
-          }
         }),
         EffectOp::AsyncBorrow(f) => Effect::new_async(move |r| {
           map_result_future(start_async_operation(f, r), move |output| output.map_err(h))
         }),
-        EffectOp::AsyncStaticFn(f) => Effect::new_static_async(move |r| {
-          map_result_future(f(r), move |output| output.map_err(h))
-        }),
         EffectOp::AsyncStatic(f) => Effect::new_static_async(move |r| {
-          map_result_future(f(r), move |output| {
+          map_result_future(start_static_async_operation(f, r), move |output| {
             output.map_err(h)
           })
         }),
-        EffectOp::AsyncInline(fut) => Effect::new_inline_async(
-          map_result_future(fut, move |output| output.map_err(h))
-        ),
       },
       repr => {
         let source = Effect::from_repr(repr);
         Effect::new_async(move |r| {
-          map_result_future(source.run_boxed(r), move |output| output.map_err(h))
+          map_result_future(source.run(r), move |output| output.map_err(h))
         })
       }
     }
@@ -1136,7 +828,7 @@ where
   R: 'static,
   G: FnOnce(A) -> B + 'static,
 {
-  source: EffectRepr<A, E, R>,
+  source: Effect<A, E, R>,
   f: G,
 }
 
@@ -1150,34 +842,15 @@ where
 {
   fn start(self: Box<Self>, r: &mut R) -> SyncStep<B, E, R> {
     let Self { source, f } = *self;
-    match start_repr(source, r) {
+    match start_effect(source, r) {
       SyncStep::Ready(Ok(a)) => ready_step(Ok(f(a))),
       SyncStep::Ready(Err(e)) => ready_step(Err(e)),
       SyncStep::AsyncBorrow(next) => SyncStep::AsyncBorrow(Box::new(move |r| {
-        box_future(async move {
-          let output = start_async_operation(next, r).await;
-          output.map(f)
-        })
+        map_result_future(start_async_operation(next, r), move |output| output.map(f))
       })),
-      SyncStep::AsyncPoll(mut next) => {
-        let mut f = Some(f);
-        SyncStep::AsyncPoll(Box::new(move |r, cx| match next(r, cx) {
-          Poll::Ready(output) => {
-            let f = match f.take() {
-              Some(f) => f,
-              None => panic!("mapped poll effect polled after completion"),
-            };
-            Poll::Ready(output.map(f))
-          }
-          Poll::Pending => Poll::Pending,
-        }))
-      }
-      SyncStep::AsyncStatic(next) => {
-        SyncStep::AsyncStatic(box_future(async move {
-          let output = next.await;
-          output.map(f)
-        }))
-      }
+      SyncStep::AsyncStatic(next) => SyncStep::AsyncStatic(Box::new(move |r| {
+        map_result_future(start_static_async_operation(next, r), move |output| output.map(f))
+      })),
     }
   }
 }
@@ -1190,7 +863,7 @@ where
   R: 'static,
   H: FnOnce(A) -> Effect<B, E, R> + 'static,
 {
-  source: EffectRepr<A, E, R>,
+  source: Effect<A, E, R>,
   f: H,
 }
 
@@ -1204,26 +877,18 @@ where
 {
   fn start(self: Box<Self>, r: &mut R) -> SyncStep<B, E, R> {
     let Self { source, f } = *self;
-    match start_repr(source, r) {
+    match start_effect(source, r) {
       SyncStep::Ready(Ok(a)) => start_effect(f(a), r),
       SyncStep::Ready(Err(e)) => ready_step(Err(e)),
       SyncStep::AsyncBorrow(next) => SyncStep::AsyncBorrow(Box::new(move |r| {
         box_future(async move {
           let a = start_async_operation(next, r).await?;
-          step_into_bind_future(start_effect(f(a), r), r).await
-        })
-      })),
-      SyncStep::AsyncPoll(mut next) => SyncStep::AsyncBorrow(Box::new(move |r| {
-        box_future(async move {
-          let a = step_into_bind_future(SyncStep::AsyncPoll(Box::new(move |r, cx| next(r, cx))), r).await?;
-          step_into_bind_future(start_effect(f(a), r), r).await
+          run_effect_async(f(a), r).await
         })
       })),
       SyncStep::AsyncStatic(next) => SyncStep::AsyncBorrow(Box::new(move |r| {
-        box_future(async move {
-          let a = next.await?;
-          step_into_bind_future(start_effect(f(a), r), r).await
-        })
+        let fut = start_static_async_operation(next, r);
+        flat_map_static_future(fut, r, f)
       })),
     }
   }
@@ -2146,59 +1811,6 @@ mod tests {
     fn unwrap_infallible_extracts_ok_value() {
       let r: Result<i32, Infallible> = Ok(42);
       assert_eq!(unwrap_infallible(r), 42);
-    }
-  }
-
-  // ── size tests ──────────────────────────────────────────────────────────────
-
-  mod size_tests {
-    use super::*;
-
-    #[test]
-    fn effect_run_future_size_is_reasonable() {
-      use core::mem::size_of;
-
-      let effect_run_future_size = size_of::<EffectRunFuture<'static, i32, ()>>();
-      let box_future_size = size_of::<BoxFuture<'static, Result<i32, ()>>>();
-      let option_box_future_size = size_of::<Option<BoxFuture<'static, Result<i32, ()>>>>();
-
-      // EffectRunFuture = Option<EffectRunState> where EffectRunState is an enum
-      // with Ready(Result) and AsyncStatic(BoxFuture).
-      // Option<BoxFuture> can use null-pointer optimization (16 bytes).
-      // Option<EffectRunState> cannot because Ready variant has no pointer,
-      // so it's 24 bytes (discriminant + padding + BoxFuture).
-      //
-      // This is +8 bytes on the stack vs BoxFuture, but saves a heap allocation
-      // for sync effects (EffectRunFuture::Ready returns immediately without Box).
-      assert!(
-        effect_run_future_size <= box_future_size + 8,
-        "EffectRunFuture ({}) should not be much larger than BoxFuture ({})",
-        effect_run_future_size,
-        box_future_size
-      );
-
-      println!("EffectRunFuture size: {}", effect_run_future_size);
-      println!("BoxFuture size: {}", box_future_size);
-      println!("Option<BoxFuture> size: {}", option_box_future_size);
-    }
-
-    #[test]
-    fn effect_size_is_reasonable() {
-      use core::mem::size_of;
-
-      let effect_size = size_of::<Effect<i32, (), ()>>();
-      let box_size = size_of::<Box<dyn ProgramOp<i32, (), ()>>>();
-
-      // Effect should be Box<dyn ProgramOp> + PhantomData
-      assert!(
-        effect_size <= box_size + 8,
-        "Effect ({}) should not be much larger than Box<dyn ProgramOp> ({})",
-        effect_size,
-        box_size
-      );
-
-      println!("Effect size: {}", effect_size);
-      println!("Box<dyn ProgramOp> size: {}", box_size);
     }
   }
 }
