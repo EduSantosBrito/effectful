@@ -186,4 +186,6 @@ Thanks to everyone who has contributed patches, reported issues, or improved the
 
 ## License
 
-This project is licensed under [CC-BY-SA-4.0](LICENSE).
+This project is a fork and adaptation of [`Industrial/id_effect`](https://github.com/Industrial/id_effect), which is licensed under the [Creative Commons Attribution-ShareAlike 4.0 International License](https://creativecommons.org/licenses/by-sa/4.0/) (`CC-BY-SA-4.0`).
+
+Changes have been made from the original project, including the rename to **effectful** and ongoing API, runtime, documentation, and developer-experience work. Unless otherwise noted, this repository is distributed under the same `CC-BY-SA-4.0` license. No endorsement by the original authors is implied.
