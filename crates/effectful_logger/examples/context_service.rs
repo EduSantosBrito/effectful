@@ -4,7 +4,7 @@
 //! Run: `devenv shell -- cargo run -p logger --example context_service`
 
 use ::effectful::{Cons, Context, Effect, Nil, Service, effect, run_blocking};
-use id_effect_logger::{EffectLogKey, EffectLogger, EffectLoggerError};
+use effectful_logger::{EffectLogKey, EffectLogger, EffectLoggerError};
 
 type LogR = Context<Cons<Service<EffectLogKey, EffectLogger>, Nil>>;
 

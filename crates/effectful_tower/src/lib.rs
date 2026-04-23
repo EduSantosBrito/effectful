@@ -19,7 +19,7 @@
 //!
 //! ## Examples
 //!
-//! See `examples/` (e.g. `cargo run -p id_effect_tower --example 001_effect_service`) or
+//! See `examples/` (e.g. `cargo run -p effectful_tower --example 001_effect_service`) or
 //! `moon run effect-tower:examples`.
 
 #![forbid(unsafe_code)]

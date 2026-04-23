@@ -5,7 +5,7 @@
 ## Basic Usage
 
 ```rust
-use id_effect::{run_test, succeed};
+use effectful::{run_test, succeed};
 
 #[test]
 fn simple_effect_succeeds() {

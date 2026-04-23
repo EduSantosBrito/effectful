@@ -44,7 +44,7 @@ use std::time::Duration;
 
 use ::effectful::{Effect, Get, Here, effect};
 use effectful::duration::duration;
-use id_effect_logger::LogLevel;
+use effectful_logger::LogLevel;
 use url::Url;
 
 use crate::ambient::current_config_provider;
@@ -493,7 +493,7 @@ impl Config<Duration> {
 }
 
 impl Config<LogLevel> {
-  /// Load a [`LogLevel`] (case-insensitive; see [`LogLevel`](id_effect_logger::LogLevel)).
+  /// Load a [`LogLevel`] (case-insensitive; see [`LogLevel`](effectful_logger::LogLevel)).
   pub fn log_level(path: impl Into<String>) -> Self {
     let segs = split_dotted(&path.into());
     Self::new(move |p| {
@@ -640,7 +640,7 @@ mod tests {
   use std::time::Duration;
 
   use crate::MapConfigProvider;
-  use id_effect_logger::LogLevel;
+  use effectful_logger::LogLevel;
 
   use super::*;
 

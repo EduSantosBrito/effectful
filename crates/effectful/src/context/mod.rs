@@ -14,6 +14,7 @@
 mod get;
 mod hlist;
 mod path;
+mod services;
 mod tag;
 mod tagged;
 mod wrapper;
@@ -26,6 +27,7 @@ pub use hlist::{Cons, Nil};
 pub use match_::{HasTag, Matcher};
 pub use optics::{EnvLens, focus, identity_lens};
 pub use path::{Here, Skip0, Skip1, Skip2, Skip3, Skip4, There, ThereHere};
+pub use services::{MissingService, Service, ServiceContext, ServiceLookup};
 pub use tag::Tag;
 pub use tagged::{Tagged, tagged};
 pub use wrapper::{Context, prepend_cell};

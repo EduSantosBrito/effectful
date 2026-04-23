@@ -5,7 +5,7 @@ You have a trait. You have an implementation. Now you need a Layer that wires th
 ## The Minimal Service Layer
 
 ```rust
-use id_effect::{LayerFn, tagged, effect};
+use effectful::{LayerFn, tagged, effect};
 
 // The production implementation
 struct PostgresUserRepository {

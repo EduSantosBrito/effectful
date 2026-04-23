@@ -20,7 +20,7 @@
 //!
 //! ```ignore
 //! use effectful::{ctx, run_async, service, Context, Cons, Nil};
-//! use id_effect_reqwest::{ReqwestClientKey, send};
+//! use effectful_reqwest::{ReqwestClientKey, send};
 //!
 //! type Env = Context<Cons<effectful::Service<ReqwestClientKey, reqwest::Client>, Nil>>;
 //!
@@ -37,7 +37,7 @@
 //!
 //! ## Runnable examples
 //!
-//! See `examples/` (e.g. `cargo run -p id_effect_reqwest --example 010_wiremock_get_text`).
+//! See `examples/` (e.g. `cargo run -p effectful_reqwest --example 010_wiremock_get_text`).
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]

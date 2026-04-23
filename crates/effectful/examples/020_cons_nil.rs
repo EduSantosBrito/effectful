@@ -1,8 +1,10 @@
 //! Ex 020 — `Cons` / `Nil` heterogenous lists form environments.
-use effectful::{Cons, Nil, Tagged};
+use effectful::{Cons, Nil, Tagged, Service};
 
-effectful::service_key!(struct AKey);
-effectful::service_key!(struct BKey);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct AKey;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct BKey;
 
 fn main() {
   let row = Cons(

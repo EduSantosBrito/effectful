@@ -1,16 +1,15 @@
 # https://moonrepo.dev/docs/config/workspace
 $schema: https://moonrepo.dev/schemas/workspace.json
 projects:
-  effect: '.'
-  id_effect_lib: crates/id_effect
-  id_effect_axum: crates/id_effect_axum
-  id_effect_config: crates/id_effect_config
-  id_effect_logger: crates/id_effect_logger
-  id_effect_macro: crates/id_effect_macro
-  id_effect_proc_macro: crates/id_effect_proc_macro
-  id_effect_reqwest: crates/id_effect_reqwest
-  id_effect_tokio: crates/id_effect_tokio
-  id_effect_tower: crates/id_effect_tower
+  effectful_lib: crates/effectful
+  effectful_axum: crates/effectful_axum
+  effectful_config: crates/effectful_config
+  effectful_logger: crates/effectful_logger
+  effectful_macro: crates/effectful_macro
+  effectful_proc_macro: crates/effectful_proc_macro
+  effectful_reqwest: crates/effectful_reqwest
+  effectful_tokio: crates/effectful_tokio
+  effectful_tower: crates/effectful_tower
 vcs:
   defaultBranch: main
   provider: github

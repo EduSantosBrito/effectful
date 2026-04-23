@@ -1,6 +1,6 @@
 # `effect` — construct catalog (`src/`)
 
-Single-page index of modules and primary APIs under `crates/id_effect/src/`. Each line states **when** to reach for it and **how** it fits the system (lazy `Effect` graphs, compile-time `R`, boundaries at `run_*`). For stratum notes and design detail, see `src/**/README.md` where present.
+Single-page index of modules and primary APIs under `crates/effectful/src/`. Each line states **when** to reach for it and **how** it fits the system (lazy `Effect` graphs, compile-time `R`, boundaries at `run_*`). For stratum notes and design detail, see `src/**/README.md` where present.
 
 ---
 
@@ -8,8 +8,8 @@ Single-page index of modules and primary APIs under `crates/id_effect/src/`. Eac
 
 | Construct | When / how to use |
 |-----------|-------------------|
-| **Public re-exports** | Prefer `use id_effect::{Effect, …}` for the supported surface; module paths (`effect::kernel::…`) remain for precision and older call sites. |
-| **`extern crate self as effect`** | Lets proc-macros emit `::id_effect::…` paths reliably when expanding inside this crate. |
+| **Public re-exports** | Prefer `use effectful::{Effect, …}` for the supported surface; module paths (`effect::kernel::…`) remain for precision and older call sites. |
+| **`extern crate self as effect`** | Lets proc-macros emit `::effectful::…` paths reliably when expanding inside this crate. |
 | **`im` re-export** | Use `effect::im` so `effect::collections` aliases and your code share one `im` version without extra deps. |
 
 ---

@@ -1,13 +1,13 @@
 //! `Effect::new_async` with `tokio::time::sleep` under [`effectful_tokio::run_async`] (via routing).
 //!
-//! Run: `cargo run -p id_effect_axum --example 020_async_effect`
+//! Run: `cargo run -p effectful_axum --example 020_async_effect`
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::routing::Router;
 use http_body_util::BodyExt;
 use effectful::Effect;
-use id_effect_axum::routing;
+use effectful_axum::routing;
 use std::convert::Infallible;
 use std::time::Duration;
 use tower::ServiceExt;

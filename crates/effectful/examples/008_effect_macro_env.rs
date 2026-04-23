@@ -1,7 +1,8 @@
 //! Ex 008 — `effect!` closure receives `&mut R` (the environment).
-use effectful::{Cons, Context, Get, Nil, Tagged, ctx, effect, run_blocking, service_key, succeed};
+use effectful::{Cons, Context, Get, Nil, Tagged, Service, ctx, effect, run_blocking, succeed};
 
-service_key!(struct CounterKey);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct CounterKey;
 
 type Env = Context<Cons<Tagged<CounterKey, i32>, Nil>>;
 

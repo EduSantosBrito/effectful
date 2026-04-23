@@ -7,7 +7,7 @@ Schemas parse structure. Validation adds constraints: an age must be positive, a
 `refine` takes a schema and a predicate. Parsing succeeds only if both the schema's parse and the predicate pass:
 
 ```rust
-use id_effect::schema::{string, i64, refine};
+use effectful::schema::{string, i64, refine};
 
 // Age must be between 0 and 150
 let age_schema = refine(
@@ -42,7 +42,7 @@ Use whichever reads more naturally.
 When conversion logic can fail — parsing a date, constructing a URL, validating an email — use `.try_map`:
 
 ```rust
-use id_effect::schema::ParseError;
+use effectful::schema::ParseError;
 
 let url_schema = string().try_map(|s| {
     url::Url::parse(&s).map_err(|e| ParseError::custom(format!("invalid URL: {e}")))
@@ -61,7 +61,7 @@ let date_schema = string().try_map(|s| {
 A `Brand` is a newtype wrapper that exists only at the type level. At runtime it's transparent. At compile time it prevents mixing up bare primitives with domain values:
 
 ```rust
-use id_effect::schema::Brand;
+use effectful::schema::Brand;
 
 // Define branded types
 type UserId   = Brand<i64,    UserIdMarker>;
@@ -107,7 +107,7 @@ send_welcome("alice@example.com".to_string()); // type error: expected Email, fo
 When a type always has the same schema, implement `HasSchema`:
 
 ```rust
-use id_effect::schema::HasSchema;
+use effectful::schema::HasSchema;
 
 impl HasSchema for User {
     fn schema() -> Schema<Self> {

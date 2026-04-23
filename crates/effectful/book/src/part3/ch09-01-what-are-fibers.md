@@ -38,7 +38,7 @@ This makes concurrent code much easier to reason about. When `process_batch` com
 Each Fiber has a unique `FiberId`. You can use it for logging, tracing, and correlation:
 
 ```rust
-use id_effect::FiberId;
+use effectful::FiberId;
 
 effect! {
     let id = ~ current_fiber_id();

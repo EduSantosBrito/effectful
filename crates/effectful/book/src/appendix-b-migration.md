@@ -1,6 +1,6 @@
 # Migrating from `async fn` to effects
 
-This appendix is a practical guide for converting existing async Rust code to id_effect. It covers common patterns and their id_effect equivalents, with migration steps for each.
+This appendix is a practical guide for converting existing async Rust code to effectful. It covers common patterns and their effectful equivalents, with migration steps for each.
 
 ## The Mental Model Shift
 
@@ -12,7 +12,7 @@ async fn get_user(id: u64, db: &DbClient) -> Result<User, DbError> {
 }
 ```
 
-In id_effect, many domain functions return an **`Effect`**—a description you run later with an environment:
+In effectful, many domain functions return an **`Effect`**—a description you run later with an environment:
 
 ```rust
 fn get_user<A, E, R>(id: u64) -> Effect<A, E, R>
@@ -234,7 +234,7 @@ The `Scope` finalizer runs whether the inner effect succeeds, fails, or is cance
 
 Migrate gradually, one module at a time:
 
-1. Start with leaf functions (those with no id_effect dependencies yet) — convert them first.
+1. Start with leaf functions (those with no effectful dependencies yet) — convert them first.
 2. Move up the call graph. Functions that call converted leaf functions become easy to convert.
 3. Push the `run_blocking` call to `main` or the request handler entry point.
 4. Convert tests last — once business logic is effect-based, tests become simple layer swaps.

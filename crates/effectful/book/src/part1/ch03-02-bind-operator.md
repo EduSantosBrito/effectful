@@ -101,7 +101,7 @@ Use `~` outside the `async move` block; use `.await` inside it.
 
 ## The Old Postfix Syntax (Deprecated)
 
-Early versions of id_effect used a postfix tilde: `expr ~`. This is no longer valid. Always use the prefix form:
+Early versions of effectful used a postfix tilde: `expr ~`. This is no longer valid. Always use the prefix form:
 
 ```rust
 // OLD — do not use

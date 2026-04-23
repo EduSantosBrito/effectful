@@ -2,7 +2,7 @@
 
 The previous chapters established the building blocks: Tags (identities), Context (the environment), and Layers (constructors). Now we put them together into the complete *Service* pattern.
 
-A Service in id_effect is the combination of:
+A Service in effectful is the combination of:
 1. A **trait** defining the interface
 2. A **tag** identifying it in the environment
 3. One or more **implementations** (production and test)

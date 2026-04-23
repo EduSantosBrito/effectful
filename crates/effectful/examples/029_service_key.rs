@@ -1,7 +1,8 @@
-//! Ex 029 — `service_key!` declares a nominal tag type.
-use effectful::service_key;
+//! Ex 029 — `#[derive(Service)]` declares a self-describing service type.
+use effectful::Service;
 
-service_key!(pub struct ApiKey);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+pub struct ApiKey;
 
 fn main() {
   let _ = std::any::TypeId::of::<ApiKey>();

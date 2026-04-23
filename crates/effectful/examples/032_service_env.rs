@@ -1,14 +1,17 @@
-//! Ex 032 — `service_env` is a one-cell `Context`.
-use effectful::{Get, ServiceEnv, run_blocking, service_env, service_key, succeed};
+//! Ex 032 — `ServiceContext` is the v1 service environment.
+use effectful::{Effect, MissingService, Service, ServiceContext, run_blocking};
 
-service_key!(struct TokenKey);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct Token {
+  value: &'static str,
+}
 
 fn main() {
-  let env = service_env::<TokenKey, _>("secret");
-  assert_eq!(*Get::<TokenKey>::get(&env), "secret");
-  assert_eq!(
-    run_blocking(succeed::<(), (), ServiceEnv<TokenKey, &str>>(()), env),
-    Ok(())
-  );
+  let env = Token { value: "secret" }.to_context();
+  assert_eq!(env.get::<Token>().map(|token| token.value), Some("secret"));
+
+  let program: Effect<&'static str, MissingService, ServiceContext> =
+    Token::use_sync(|token| token.value);
+  assert_eq!(run_blocking(program, env), Ok("secret"));
   println!("032_service_env ok");
 }

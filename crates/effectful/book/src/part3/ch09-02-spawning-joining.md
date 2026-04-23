@@ -21,7 +21,7 @@ let remote_result = handle.join().await.into_result_or_panic()?;
 ## fiber_all: Run Many, Collect All
 
 ```rust
-use id_effect::fiber_all;
+use effectful::fiber_all;
 
 // Run all concurrently; collect all results
 let results: Vec<User> = run_blocking(
@@ -36,7 +36,7 @@ For independent work where all results are needed, `fiber_all` is the idiomatic 
 ## fiber_race: First to Complete Wins
 
 ```rust
-use id_effect::fiber_race;
+use effectful::fiber_race;
 
 // Try primary and backup concurrently — take whichever responds first
 let data = run_blocking(
@@ -50,7 +50,7 @@ let data = run_blocking(
 ## fiber_any: First Success
 
 ```rust
-use id_effect::fiber_any;
+use effectful::fiber_any;
 
 // Try all; return first success (ignore failures until all done)
 let result = fiber_any(vec![
@@ -67,7 +67,7 @@ let result = fiber_any(vec![
 For cases where you need to spawn with full control:
 
 ```rust
-use id_effect::run_fork;
+use effectful::run_fork;
 
 let runtime = Runtime::current();
 let handle = run_fork(runtime, || (my_effect, my_env));

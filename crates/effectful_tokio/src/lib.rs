@@ -1,14 +1,14 @@
-//! Tokio integration for [`id_effect`]: [`TokioRuntime`] implements [`effectful::Runtime`] with
+//! Tokio integration for [`effectful`]: [`TokioRuntime`] implements [`effectful::Runtime`] with
 //! cooperative sleep/yield, and **runs forked effects** on Tokio’s **blocking thread pool** via
 //! [`tokio::runtime::Handle::spawn_blocking`] (the `Effect` interpreter is driven with
 //! [`run_blocking`]; it is not `Send` for [`tokio::spawn`]).
 //!
-//! Tower, Axum, and other Tokio-based adapters should depend on **`id_effect_tokio`** for this wiring.
+//! Tower, Axum, and other Tokio-based adapters should depend on **`effectful_tokio`** for this wiring.
 //!
 //! ## Examples
 //!
 //! See `examples/` (e.g. `109_tokio_end_to_end`). Re-exports
-//! [`run_async`], [`run_blocking`], [`run_fork`], and [`yield_now`] from `id_effect` for use at the
+//! [`run_async`], [`run_blocking`], [`run_fork`], and [`yield_now`] from `effectful` for use at the
 //! async boundary alongside [`TokioRuntime`].
 
 #![forbid(unsafe_code)]

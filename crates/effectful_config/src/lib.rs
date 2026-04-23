@@ -239,7 +239,7 @@ pub mod config {
 use std::marker::PhantomData;
 
 use ::figment::Figment;
-use effectful::{Layer, Never};
+use effectful::{LayerBuild, Never};
 use serde::de::DeserializeOwned;
 
 /// Deserialize `T` from a prepared [`Figment`].
@@ -287,7 +287,7 @@ impl<T> FigmentLayer<T> {
   }
 }
 
-impl<T: DeserializeOwned + Send + Sync + 'static> Layer for FigmentLayer<T> {
+impl<T: DeserializeOwned + Send + Sync + 'static> LayerBuild for FigmentLayer<T> {
   type Output = T;
   type Error = ConfigError;
 
@@ -324,7 +324,7 @@ impl FigmentProviderLayer {
   }
 }
 
-impl Layer for FigmentProviderLayer {
+impl LayerBuild for FigmentProviderLayer {
   type Output = FigmentConfigProvider;
   type Error = Never;
 
@@ -359,7 +359,7 @@ impl EnvProviderLayer {
   }
 }
 
-impl Layer for EnvProviderLayer {
+impl LayerBuild for EnvProviderLayer {
   type Output = EnvConfigProvider;
   type Error = Never;
 

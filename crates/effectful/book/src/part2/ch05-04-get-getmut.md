@@ -5,7 +5,7 @@ Once you have a `Context`, you need to extract values from it. The `Get` and `Ge
 ## Get: Read-Only Access
 
 ```rust
-use id_effect::Get;
+use effectful::Get;
 
 fn use_database<R>(env: &R) -> &Pool
 where
@@ -22,7 +22,7 @@ The compiler finds the right element in the `Cons` chain automatically. Position
 ## GetMut: Mutable Access
 
 ```rust
-use id_effect::GetMut;
+use effectful::GetMut;
 
 fn increment_counter<R>(env: &mut R)
 where

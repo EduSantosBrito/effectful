@@ -1,9 +1,9 @@
 //! Ex 109 — End-to-end: Tokio [`TokioRuntime`], typed [`req!`] context, `effect!`, streams, and `catch`.
 //!
-//! Run: `cargo run -p id_effect_tokio --example 109_tokio_end_to_end`
+//! Run: `cargo run -p effectful_tokio --example 109_tokio_end_to_end`
 
 use effectful::{Effect, Runtime, Skip1, Skip2, Stream, ctx, effect, req, run_async, succeed};
-use id_effect_tokio::{TokioRuntime, yield_now};
+use effectful_tokio::{TokioRuntime, yield_now};
 use std::time::Duration;
 
 effectful::service_key!(struct ApiBaseUrlKey);

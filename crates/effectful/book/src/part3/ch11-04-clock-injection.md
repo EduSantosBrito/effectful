@@ -5,7 +5,7 @@
 ## The Clock Trait
 
 ```rust
-use id_effect::{Clock};
+use effectful::{Clock};
 
 // The Clock trait abstracts time
 trait Clock: Send + Sync {
@@ -14,12 +14,12 @@ trait Clock: Send + Sync {
 }
 ```
 
-All time-related operations in id_effect go through the current fiber's `Clock`. Replace the clock, and "time" moves as fast as you drive it.
+All time-related operations in effectful go through the current fiber's `Clock`. Replace the clock, and "time" moves as fast as you drive it.
 
 ## Production: LiveClock
 
 ```rust
-use id_effect::LiveClock;
+use effectful::LiveClock;
 
 // Uses real system time and tokio::time::sleep
 let live_clock = LiveClock::new();
@@ -30,7 +30,7 @@ In production, inject `LiveClock` through the environment. Effect code never cal
 ## Testing: TestClock
 
 ```rust
-use id_effect::TestClock;
+use effectful::TestClock;
 
 let clock = TestClock::new();
 

@@ -16,7 +16,7 @@ pub trait Runtime {
   /// Spawn an effect as a fiber; returns a handle to observe completion.
   ///
   /// `f` is called on the runtime’s worker (a dedicated OS thread for [`ThreadSleepRuntime`], a
-  /// blocking-pool thread for `TokioRuntime` in workspace crate `id_effect_tokio`). It must return
+  /// blocking-pool thread for `TokioRuntime` in workspace crate `effectful_tokio`). It must return
   /// `(effect, env)` there so
   /// [`Effect`] need not be [`Send`] — only the **factory** closure is [`Send`].
   ///
@@ -56,7 +56,7 @@ pub trait Runtime {
 ///
 /// Suitable for [`crate::scheduling::schedule::repeat`] / [`crate::scheduling::schedule::retry`] defaults and other
 /// synchronous drivers. For Tokio-friendly delays inside an async runtime, use the `TokioRuntime`
-/// type from workspace crate `id_effect_tokio`.
+/// type from workspace crate `effectful_tokio`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ThreadSleepRuntime;
 

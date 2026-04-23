@@ -5,7 +5,7 @@
 //! - **[`mod@macros`]** — declarative macros ([`pipe!`](macro@pipe), [`ctx!`](macro@ctx), …).
 //! - **[`context`]** — [`Tag`], [`Tagged`], [`Cons`] / [`Nil`], [`Get`] / [`GetMut`].
 //! - **[`layer`]** — [`Layer`], [`Stack`], [`StackThen`], [`LayerFn`].
-//! - **[`mod@service`]** — [`Service`], [`ServiceEnv`], [`service_env`], [`service_key!`](macro@service_key), [`layer_service`] (Effect.ts-style DI).
+//! - **[`mod@context`]** — [`Service`], [`ServiceContext`], typed service access and lookup.
 //! - **[`mod@piping`]** — [`Pipe`] trait (macro: [`pipe!`](macro@pipe)).
 //! - **[`schedule`]** — Effect.ts-style repeat/retry policies.
 //! - **[`stream`]** — Effect.ts-inspired stream combinators.
@@ -36,7 +36,7 @@
   clippy::unnecessary_lazy_evaluations
 )]
 // `#[cfg(test)]` law tests and similar intentionally exercise patterns Clippy flags (`unit` values,
-// `clone` on `Copy` `Result`, etc.); keep `cargo clippy -p id_effect --all-targets -- -D warnings` green.
+// `clone` on `Copy` `Result`, etc.); keep `cargo clippy -p effectful --all-targets -- -D warnings` green.
 #![cfg_attr(
   test,
   allow(
@@ -51,11 +51,12 @@
   )
 )]
 
-// Lets `::effectful::…` in `id_effect_macro` expansions resolve when those macros are used inside this crate.
+// Lets `::effectful::…` in `effectful_macro` expansions resolve when those macros are used inside this crate.
 extern crate self as effectful;
 
+#[allow(deprecated)]
 pub use effectful_macro::{ctx, err, layer_graph, layer_node, pipe, req, service_def, service_key};
-pub use effectful_proc_macro::{EffectData, effect, effect_tagged};
+pub use effectful_proc_macro::{EffectData, Service, TaggedError, effect, effect_tagged};
 
 pub mod algebra;
 pub mod collections;
@@ -89,8 +90,9 @@ pub use concurrency::{
   fiber_never, fiber_succeed, interrupt_all, with_fiber_id,
 };
 pub use context::{
-  Cons, Context, Get, GetMut, HasTag, Here, Matcher, Nil, Skip0, Skip1, Skip2, Skip3, Skip4, Tag,
-  Tagged, There, ThereHere, prepend_cell, tagged,
+  Cons, Context, Get, GetMut, HasTag, Here, Matcher, MissingService, Nil, Service,
+  ServiceContext, ServiceLookup, Skip0, Skip1, Skip2, Skip3, Skip4, Tag, Tagged, There,
+  ThereHere, prepend_cell, tagged,
 };
 pub use coordination::semaphore::Permit;
 pub use coordination::{
@@ -106,9 +108,9 @@ pub use foundation::mutable_ref::MutableRef;
 pub use foundation::piping::Pipe;
 pub use foundation::predicate::Predicate;
 pub use layer::{
-  Layer, LayerDiagnostic, LayerEffect, LayerExt, LayerFn, LayerFnFrom, LayerFrom, LayerGraph,
-  LayerNode, LayerPlan, LayerPlannerError, Service, ServiceEnv, Stack, StackThen, layer_service,
-  layer_service_env, merge_all, provide_service, service, service_env,
+  Layer, LayerBuild, LayerDiagnostic, LayerEffect, LayerExt, LayerFn, LayerFnFrom, LayerFrom,
+  LayerGraph, LayerNode, LayerPlan, LayerPlannerError, LayerError, MemoizedLayer, MergedLayer,
+  Stack, StackThen, TypedLayer, TypedLayerExt, merge_all,
 };
 pub use observability::{
   AnnotateCurrentSpanErr, AnnotateCurrentSpanSuccess, EffectEvent, FiberEvent, LogSpan, Metric,

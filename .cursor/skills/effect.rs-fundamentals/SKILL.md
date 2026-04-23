@@ -341,7 +341,7 @@ pub fn ok() -> () { () }
 **GOOD** — semantic terminal value or explicit discard in pure pipelines.
 
 ```rust
-use id_effect::foundation::unit::{discard, Unit};
+use effectful::foundation::unit::{discard, Unit};
 
 fn consume_token(t: Token) -> Unit {
     discard(t)
@@ -360,7 +360,7 @@ let v = r.expect("never fails"); // unnecessary panic path
 **GOOD**
 
 ```rust
-use id_effect::foundation::never::absurd;
+use effectful::foundation::never::absurd;
 
 let r: Result<i32, Infallible> = Ok(1);
 let v = match r {
@@ -374,14 +374,14 @@ let v = match r {
 **BAD** — mixing `effect::foundation::function::compose` and `effect::func::compose` in the same module.
 
 ```rust
-use id_effect::foundation::function::compose as fcompose;
-use id_effect::func::compose as gcompose;
+use effectful::foundation::function::compose as fcompose;
+use effectful::func::compose as gcompose;
 ```
 
 **GOOD** — pick **`effect::func`** (crate re-export) for app code.
 
 ```rust
-use id_effect::func::{compose, identity};
+use effectful::func::{compose, identity};
 let f = compose(|x: i32| x + 1, |x: i32| x * 2);
 ```
 
@@ -397,7 +397,7 @@ let x = p.1; // size?
 **GOOD** — projections with stable names.
 
 ```rust
-use id_effect::foundation::product::{fst, snd};
+use effectful::foundation::product::{fst, snd};
 let p = (price, size);
 let _px = fst(p);
 let _sz = snd(p);
@@ -414,7 +414,7 @@ let r = Ok(1).map_err(|e| e).map(|x| x + 1);
 **GOOD** — categorical eliminator when branching both sides.
 
 ```rust
-use id_effect::foundation::coproduct::{bimap, right};
+use effectful::foundation::coproduct::{bimap, right};
 
 let r = bimap(right(1), |l: String| l.len(), |r| r + 1);
 ```
@@ -431,7 +431,7 @@ fn from_wire(s: &str) -> i32 { s.parse().unwrap() }
 **GOOD** — package as `Iso` + round-trip tests.
 
 ```rust
-use id_effect::foundation::isomorphism::Iso;
+use effectful::foundation::isomorphism::Iso;
 
 let iso = Iso::new(|x: i32| x.to_string(), |s: String| s.parse().unwrap_or(0));
 ```
@@ -451,7 +451,7 @@ if let Some(a) = oa {
 **GOOD**
 
 ```rust
-use id_effect::foundation::option_::option;
+use effectful::foundation::option_::option;
 let z = option::zip(oa, ob);
 ```
 
@@ -466,7 +466,7 @@ let y = f(g(h(x)));
 **GOOD**
 
 ```rust
-use id_effect::Pipe;
+use effectful::Pipe;
 let y = x.pipe(h).pipe(g).pipe(f);
 ```
 
@@ -481,7 +481,7 @@ if x > 0 && x < 10 && x % 2 == 0 { /* ... */ }
 **GOOD** — reusable, named predicates.
 
 ```rust
-use id_effect::foundation::predicate::predicate;
+use effectful::foundation::predicate::predicate;
 
 let p = predicate::and(
     Box::new(|n: &i32| *n > 0) as effect::Predicate<i32>,
@@ -520,7 +520,7 @@ impl<W> MyBox<W> {
 **GOOD** — implement `Functor`/`Monad` once and reuse; **application** code usually uses `Effect` directly.
 
 ```rust
-use id_effect::algebra::functor::Functor;
+use effectful::algebra::functor::Functor;
 // Functor::map(&my_effect_like_type, f) in generic utilities/tests — not typical app code
 ```
 
@@ -578,7 +578,7 @@ eff.zoom_env(|outer| &outer.inner.field)
 **GOOD** — reusable `EnvLens` for the same projection.
 
 ```rust
-use id_effect::context::optics::{focus, EnvLens};
+use effectful::context::optics::{focus, EnvLens};
 let lens = EnvLens::new(|outer: &Outer| &outer.inner.field);
 let _ = focus(lens, eff);
 ```
@@ -596,8 +596,8 @@ match msg.type_id {
 **GOOD** — `Matcher` with ordered predicates / tags (`context::match_`).
 
 ```rust
-use id_effect::context::match_::Matcher;
-use id_effect::foundation::predicate::Predicate;
+use effectful::context::match_::Matcher;
+use effectful::foundation::predicate::Predicate;
 
 let m = Matcher::new()
     .when(Box::new(|m: &Msg| m.tag() == "a") as Predicate<Msg>, handle_a)
@@ -644,7 +644,7 @@ let ctx = Context::new(Cons(Tagged::<K, _>::new(v), Nil));
 **GOOD**
 
 ```rust
-use id_effect::{ctx, Context, Cons, Nil, Tagged};
+use effectful::{ctx, Context, Cons, Nil, Tagged};
 
 let ctx: Context<Cons<Tagged<K, V>, Nil>> = Context::new(Cons(Tagged::<K, _>::new(v), Nil));
 // Or use `ctx!` where your codebase already does — keep one style project-wide.
@@ -1000,8 +1000,8 @@ run_test_with_clock(effect, |clk| {
 **GOOD** — depend on `effect::im` / `effect::collections` aliases for a single version line.
 
 ```rust
-use id_effect::im::Vector;
-use id_effect::EffectVector;
+use effectful::im::Vector;
+use effectful::EffectVector;
 ```
 
 ---
@@ -1107,7 +1107,7 @@ impl From<LogErr> for DomainErr { fn from(_: LogErr) -> Self { Self::Any } }
 
 ## Appendix — remaining `effect` constructs (each with BAD / GOOD)
 
-The sections above cover the **big rocks**. The pairs below complete the surface area of `crates/id_effect/src/*` so no public concept is left without guidance.
+The sections above cover the **big rocks**. The pairs below complete the surface area of `crates/effectful/src/*` so no public concept is left without guidance.
 
 ### `algebra::semigroup` / `monoid`
 
@@ -1121,7 +1121,7 @@ fn empty() -> Metrics { Metrics::default() } // not wired as monoid laws
 **GOOD** — explicit `Semigroup`/`Monoid` instances when writing generic folds or tests over laws.
 
 ```rust
-use id_effect::algebra::monoid::Monoid;
+use effectful::algebra::monoid::Monoid;
 // impl Monoid for Metrics where combine/empty obey laws — use in generic algorithms
 ```
 
@@ -1140,7 +1140,7 @@ fn app_step(x: impl Applicative<...>) -> impl Applicative<...> { ... }
 **BAD** — importing kernel modules in app crates to reinvent `Effect`.
 
 ```rust
-use id_effect::kernel::thunk::Thunk;
+use effectful::kernel::thunk::Thunk;
 ```
 
 **GOOD** — use **`Effect` + `effect!`**; touch kernel submodules only when extending the runtime or writing advanced library code inside `effect` itself.
@@ -1369,7 +1369,7 @@ assert_eq!(json, "{ \"a\": 1 }");
 
 **GOOD** — snapshot assertions (module helpers) for stable golden outputs of integrated effect runs.
 
-### Crate root: `extern crate self as id_effect`
+### Crate root: `extern crate self as effectful`
 
 **BAD** — macros emitting unstable relative paths.
 
@@ -1377,7 +1377,7 @@ assert_eq!(json, "{ \"a\": 1 }");
 // proc macro outputs `use crate::Effect` from consumer crate — breaks
 ```
 
-**GOOD** — rely on `::id_effect::…` paths from macros (`extern crate self as id_effect` is why this works inside the `id_effect` crate).
+**GOOD** — rely on `::effectful::…` paths from macros (`extern crate self as effectful` is why this works inside the `effectful` crate).
 
 ---
 

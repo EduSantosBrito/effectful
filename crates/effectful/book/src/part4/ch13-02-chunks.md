@@ -5,7 +5,7 @@ A `Stream` doesn't emit elements one at a time at the memory level. It emits the
 ## What Is a Chunk
 
 ```rust
-use id_effect::Chunk;
+use effectful::Chunk;
 
 // A Chunk is a fixed-capacity contiguous sequence
 let chunk: Chunk<i32> = Chunk::from_vec(vec![1, 2, 3, 4, 5]);

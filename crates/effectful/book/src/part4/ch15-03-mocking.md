@@ -1,6 +1,6 @@
 # Mocking Services — Test Doubles via Layers
 
-In id_effect, "mocking" isn't a special testing concept — it's just providing a different `Layer`. Production code gets a `PostgresDb` layer. Test code gets an `InMemoryDb` layer. Business logic never knows the difference.
+In effectful, "mocking" isn't a special testing concept — it's just providing a different `Layer`. Production code gets a `PostgresDb` layer. Test code gets an `InMemoryDb` layer. Business logic never knows the difference.
 
 No mock frameworks. No `#[automock]`. No `vi.mock()` equivalent. Just layers.
 

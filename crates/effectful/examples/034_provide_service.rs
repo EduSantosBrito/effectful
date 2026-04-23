@@ -1,27 +1,28 @@
-//! Ex 034 — `provide_service` fixes the head tag using a value and shortens `R`.
-use effectful::{
-  Cons, Context, Get, Nil, ThereHere, ctx, effect, provide_service, run_blocking, service_key,
-};
+//! Ex 034 — `Effect::provide` supplies services through a `Layer`.
+use effectful::{Effect, Layer, MissingService, Service, ServiceContext, run_blocking};
 
-service_key!(struct GateKey);
-service_key!(struct ValueKey);
-
-type Full =
-  Context<Cons<effectful::Service<GateKey, bool>, Cons<effectful::Service<ValueKey, i32>, Nil>>>;
-type Short = Context<Cons<effectful::Service<ValueKey, i32>, Nil>>;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct Gate {
+  on: bool,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct Value {
+  n: i32,
+}
 
 fn main() {
-  let program = effect!(|r: &mut Full| {
-    let on = bind* Ok::<_, ()>(*Get::<GateKey>::get(r));
-    let v = bind* Ok::<_, ()>(*r.get_path::<ValueKey, ThereHere>());
-    if on {
-      v
-    } else {
-      0
-    }
+  let program: Effect<i32, MissingService, ServiceContext> = Gate::use_(|gate| {
+    Value::use_sync(move |value| {
+      if gate.on {
+        value.n
+      } else {
+        0
+      }
+    })
   });
-  let short: Short = ctx!(ValueKey => 42);
-  let peeled = provide_service(program, true);
-  assert_eq!(run_blocking(peeled, short), Ok::<i32, ()>(42));
+  let gate = Layer::<Gate, MissingService>::succeed(Gate { on: true });
+  let value = Layer::<Value, MissingService>::succeed(Value { n: 42 });
+
+  assert_eq!(run_blocking(program.provide(gate.merge(value)), ()), Ok(42));
   println!("034_provide_service ok");
 }

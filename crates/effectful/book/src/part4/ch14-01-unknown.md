@@ -5,7 +5,7 @@
 ## Creating Unknown Values
 
 ```rust
-use id_effect::schema::Unknown;
+use effectful::schema::Unknown;
 
 // From a JSON string
 let u: Unknown = Unknown::from_json_str(r#"{"name": "Alice", "age": 30}"#)?;
@@ -30,7 +30,7 @@ let arr: Unknown = Unknown::array([Unknown::integer(1), Unknown::integer(2)]);
 
 ## Why Not serde_json::Value Directly?
 
-`serde_json::Value` is an excellent data type, but it's stringly typed: `value["name"]` gives you an `Option<&Value>` and there's no structure around parse errors, path tracking, or accumulation. `Unknown` wraps the same idea but integrates with id_effect's schema parser, which gives you:
+`serde_json::Value` is an excellent data type, but it's stringly typed: `value["name"]` gives you an `Option<&Value>` and there's no structure around parse errors, path tracking, or accumulation. `Unknown` wraps the same idea but integrates with effectful's schema parser, which gives you:
 
 - **Path tracking** — "error at `.users[3].email`"
 - **Accumulated errors** — all failures in one parse, not just the first
@@ -83,7 +83,7 @@ Nothing beyond the parse boundary sees `Unknown`. Domain functions only accept v
 If you have existing `serde`-deserializable types, use the serde bridge (requires the `schema-serde` feature):
 
 ```rust
-use id_effect::schema::serde_bridge::unknown_from_serde_json;
+use effectful::schema::serde_bridge::unknown_from_serde_json;
 
 // Deserialise via serde, then convert to Unknown for schema validation
 let value: serde_json::Value = serde_json::from_str(input)?;

@@ -5,7 +5,7 @@
 ## Defining a FiberRef
 
 ```rust
-use id_effect::FiberRef;
+use effectful::FiberRef;
 
 // A fiber-local trace ID, defaulting to "none"
 static TRACE_ID: FiberRef<String> = FiberRef::new(|| "none".to_string());

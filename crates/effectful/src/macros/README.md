@@ -5,14 +5,14 @@ This module is the **stable `effect::macros::*` path** for macros implemented in
 - **`effect-macro`** — declarative macros: `pipe!`, `ctx!`, `req!`, `err!`, `service_key!`, `service_def!`, `layer_graph!`, `layer_node!`, …
 - **`effect-proc-macro`** — procedural macros: `effect!`, `effect_tagged!`, `EffectData`, …
 
-Rust cannot mix `macro_rules!` and `#[proc_macro]` in one crate, so the `effect` crate **re-exports** them at the root (`pub use id_effect_macro::…`, `pub use id_effect_proc_macro::…`) and exposes `macros::id_effect::effect` as a stable path for the procedural `effect!` macro.
+Rust cannot mix `macro_rules!` and `#[proc_macro]` in one crate, so the `effect` crate **re-exports** them at the root (`pub use effectful_macro::…`, `pub use effectful_proc_macro::…`) and exposes `macros::effectful::effect` as a stable path for the procedural `effect!` macro.
 
 ## What lives here
 
 | Item | Role |
 |------|------|
-| `macros::effect` | Re-export of `id_effect_proc_macro::effect` — do-notation for `Effect`. |
-| Re-exports (see [`mod.rs`](mod.rs)) | Same symbols as `use id_effect::{pipe, ctx, …}` for module-qualified imports. |
+| `macros::effect` | Re-export of `effectful_proc_macro::effect` — do-notation for `Effect`. |
+| Re-exports (see [`mod.rs`](mod.rs)) | Same symbols as `use effectful::{pipe, ctx, …}` for module-qualified imports. |
 
 ## What it is used for
 
@@ -30,5 +30,5 @@ Rust cannot mix `macro_rules!` and `#[proc_macro]` in one crate, so the `effect`
 ## See also
 
 - [`kernel`](../kernel/README.md) — what `effect!` builds.
-- Crates `crates/id_effect_macro`, `crates/id_effect_proc_macro` — implementations.
+- Crates `crates/effectful_macro`, `crates/effectful_proc_macro` — implementations.
 - [`SPEC.md`](../../SPEC.md) — naming and macro-related conventions.

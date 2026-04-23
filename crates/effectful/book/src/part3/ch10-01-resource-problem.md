@@ -37,7 +37,7 @@ RAII relies on `Drop` running synchronously when a value goes out of scope. In a
 
 ## The Solution Preview
 
-id_effect solves this with:
+effectful solves this with:
 - **`Scope`** — a region where finalizers are registered and guaranteed to run (even on cancellation or panic)
 - **`acquire_release`** — a combinator that pairs acquisition with its cleanup
 - **`Pool`** — for long-lived resources that need controlled reuse

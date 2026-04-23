@@ -4,7 +4,7 @@ Unit tests check specific cases. Property tests check invariants: statements tha
 
 ## Setup
 
-id_effect works with both [`proptest`](https://github.com/proptest-rs/proptest) and [`quickcheck`](https://github.com/BurntSushi/quickcheck). The examples below use `proptest`.
+effectful works with both [`proptest`](https://github.com/proptest-rs/proptest) and [`quickcheck`](https://github.com/BurntSushi/quickcheck). The examples below use `proptest`.
 
 ```toml
 [dev-dependencies]

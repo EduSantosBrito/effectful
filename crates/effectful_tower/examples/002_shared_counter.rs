@@ -4,14 +4,14 @@
 //! Prefer a current-thread Tokio runtime when awaiting this crate’s service futures (see
 //! `001_effect_service.rs`).
 //!
-//! Run: `cargo run -p id_effect_tower --example 002_shared_counter`
+//! Run: `cargo run -p effectful_tower --example 002_shared_counter`
 //! Or: `moon run effect-tower:examples`
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use effectful::succeed;
-use id_effect_tower::EffectService;
+use effectful_tower::EffectService;
 use tower::{Service, ServiceExt};
 
 #[tokio::main(flavor = "current_thread")]

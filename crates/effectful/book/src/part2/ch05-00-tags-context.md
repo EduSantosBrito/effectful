@@ -4,4 +4,4 @@ Chapter 4 showed how `R` encodes dependencies as types. We used simple types lik
 
 This chapter introduces the solution: **Tags**. Tags give values compile-time identities, and **Context** assembles them into a heterogeneous list that the compiler can query by name, not by position.
 
-By the end you'll understand why id_effect uses this structure instead of tuples, and how to extract exactly the service you need from any environment.
+By the end you'll understand why effectful uses this structure instead of tuples, and how to extract exactly the service you need from any environment.

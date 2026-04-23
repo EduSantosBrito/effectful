@@ -36,7 +36,7 @@ Each of these methods turns a `Stream<A, E, R>` into an `Effect<B, E, R>`, which
 When the built-in consumers aren't enough, implement `Sink`:
 
 ```rust
-use id_effect::{Sink, Chunk, Effect};
+use effectful::{Sink, Chunk, Effect};
 
 struct CsvWriter {
     path: PathBuf,

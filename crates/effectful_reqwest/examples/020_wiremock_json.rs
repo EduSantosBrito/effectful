@@ -1,9 +1,9 @@
-//! [`id_effect_reqwest::json`] with a typed response body.
+//! [`effectful_reqwest::json`] with a typed response body.
 //!
-//! Run: `cargo run -p id_effect_reqwest --example 020_wiremock_json`
+//! Run: `cargo run -p effectful_reqwest --example 020_wiremock_json`
 
 use effectful::service_env;
-use id_effect_reqwest::{Client, Error, ReqwestClientKey, json};
+use effectful_reqwest::{Client, Error, ReqwestClientKey, json};
 use effectful_tokio::run_async;
 use serde::{Deserialize, Serialize};
 use wiremock::matchers::{method, path};

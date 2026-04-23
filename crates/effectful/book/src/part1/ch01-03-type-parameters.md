@@ -13,7 +13,7 @@ Let's examine each one.
 The `A` parameter is the success type — what you get back when everything goes right.
 
 ```rust
-use id_effect::{Effect, succeed};
+use effectful::{Effect, succeed};
 
 // This effect produces an i32 on success
 let answer: Effect<i32, String, ()> = succeed(42);
@@ -39,7 +39,7 @@ Each `.map()` transforms the success value while preserving the error type and r
 The `E` parameter is the failure type — what you get back when something goes wrong.
 
 ```rust
-use id_effect::{Effect, fail};
+use effectful::{Effect, fail};
 
 // This effect always fails with a String error
 let failure: Effect<i32, String, ()> = fail("something went wrong".to_string());
@@ -99,7 +99,7 @@ The `.provide()` method takes a requirement and satisfies it, changing the `R` t
 
 ## Why R Matters
 
-The `R` parameter is why id_effect can offer compile-time dependency injection.
+The `R` parameter is why effectful can offer compile-time dependency injection.
 
 Consider this function signature:
 

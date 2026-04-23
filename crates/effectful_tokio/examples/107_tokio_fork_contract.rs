@@ -1,10 +1,10 @@
 //! Ex 107 — `run_fork` on `TokioRuntime` runs the effect on the Tokio runtime; `join` returns the result.
 //!
-//! Run: `cargo run -p id_effect_tokio --example 107_tokio_fork_contract`
+//! Run: `cargo run -p effectful_tokio --example 107_tokio_fork_contract`
 
 use effectful::kernel::succeed;
 use effectful::run_fork;
-use id_effect_tokio::TokioRuntime;
+use effectful_tokio::TokioRuntime;
 
 fn main() {
   let rt = TokioRuntime::new_current_thread().expect("tokio runtime should build");

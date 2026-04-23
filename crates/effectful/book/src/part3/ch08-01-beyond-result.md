@@ -18,10 +18,10 @@ Traditional Rust handles unexpected failures through panics, which unwind (or ab
 
 ## The Cause Type
 
-`Cause<E>` is id_effect's complete taxonomy of failure:
+`Cause<E>` is effectful's complete taxonomy of failure:
 
 ```rust
-use id_effect::Cause;
+use effectful::Cause;
 
 enum Cause<E> {
     Fail(E),                // Your typed, expected error

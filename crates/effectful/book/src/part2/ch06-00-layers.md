@@ -6,4 +6,4 @@ In small programs you can construct context manually with `ctx!` and hand values
 
 That's what **Layers** are for.
 
-A Layer is a recipe for building part of an environment. It knows what it produces, what it needs to produce it, and (optionally) how to clean up afterward. Wire Layers together, and id_effect figures out the right build order automatically.
+A Layer is a recipe for building part of an environment. It knows what it produces, what it needs to produce it, and (optionally) how to clean up afterward. Wire Layers together, and effectful figures out the right build order automatically.

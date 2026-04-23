@@ -31,7 +31,7 @@
 //! ```ignore
 //! use axum::{Router, extract::State};
 //! use effectful::{succeed, Effect};
-//! use id_effect_axum::routing;
+//! use effectful_axum::routing;
 //!
 //! #[derive(Clone)]
 //! struct AppState { /* … */ }
@@ -57,7 +57,7 @@
 //!
 //! ## Examples
 //!
-//! See `examples/` (e.g. `cargo run -p id_effect_axum --example 010_routing_hello`).
+//! See `examples/` (e.g. `cargo run -p effectful_axum --example 010_routing_hello`).
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]

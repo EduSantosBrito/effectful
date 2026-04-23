@@ -1,9 +1,9 @@
 //! Ex 108 — Tokio-backed `Runtime`: monotonic `now`, async `sleep`, cooperative `yield_now`.
 //!
-//! Run: `cargo run -p id_effect_tokio --example 108_tokio_clock`
+//! Run: `cargo run -p effectful_tokio --example 108_tokio_clock`
 
 use effectful::Runtime;
-use id_effect_tokio::{TokioRuntime, run_async, yield_now};
+use effectful_tokio::{TokioRuntime, run_async, yield_now};
 use std::time::Duration;
 
 fn main() {

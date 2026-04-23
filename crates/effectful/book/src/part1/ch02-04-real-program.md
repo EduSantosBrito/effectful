@@ -30,7 +30,7 @@ enum AppError {
 Each step is a focused effect:
 
 ```rust
-use id_effect::{Effect, effect, succeed, fail};
+use effectful::{Effect, effect, succeed, fail};
 
 fn load_config() -> Effect<Config, AppError, ()> {
     // In a real app, read from a file or env vars

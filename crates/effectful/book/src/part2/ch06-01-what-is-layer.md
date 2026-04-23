@@ -29,7 +29,7 @@ A layer that takes a `Tagged<ConfigKey>` and produces a `Tagged<DatabaseKey>`, p
 ## A Simple Layer
 
 ```rust
-use id_effect::{Layer, LayerFn, effect, tagged};
+use effectful::{Layer, LayerFn, effect, tagged};
 
 let db_layer: Layer<Tagged<DatabaseKey>, DbError, Tagged<ConfigKey>> =
     LayerFn::new(|config: &Tagged<ConfigKey>| {

@@ -2,12 +2,12 @@
 
 Creating a database connection takes time: DNS lookup, TCP handshake, TLS, authentication. Creating one per request is wasteful. A pool maintains a set of connections and lends them out, returning them when done.
 
-id_effect provides `Pool` and `KeyedPool` as first-class effect constructs.
+effectful provides `Pool` and `KeyedPool` as first-class effect constructs.
 
 ## Pool: Basic Connection Pool
 
 ```rust
-use id_effect::Pool;
+use effectful::Pool;
 
 // Create a pool of up to 10 connections
 let pool: Pool<Connection> = Pool::new(
@@ -51,7 +51,7 @@ The pool queues waiters and notifies them as connections are returned.
 For scenarios with multiple distinct pools (e.g., read replica + write primary):
 
 ```rust
-use id_effect::KeyedPool;
+use effectful::KeyedPool;
 
 let pools: KeyedPool<&str, Connection> = KeyedPool::new(
     |key: &&str| open_connection(key),

@@ -89,17 +89,19 @@ where
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
   use super::*;
   use crate::context::{Cons, Context, Nil};
-  use crate::layer::Layer;
+  use crate::layer::LayerBuild;
   use crate::schema::data::EffectData;
   use crate::schema::equal::{EffectHash, equals};
   use rstest::rstest;
   use std::collections::HashSet;
 
   crate::service_key!(struct PortKey);
-  crate::service_def!(struct HttpKey as HttpService => u16);
+  crate::service_key!(struct HttpKey);
+  type HttpService = Service<HttpKey, u16>;
 
   mod constructors {
     use super::*;

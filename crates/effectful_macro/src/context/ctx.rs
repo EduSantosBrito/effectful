@@ -17,9 +17,9 @@ macro_rules! ctx {
     ::effectful::Context::new($crate::ctx!(@list $k => $v $(, $rk => $rv )*))
   };
   (@list $k:ty => $v:expr) => {
-    ::effectful::Cons(::effectful::service::<$k, _>($v), ::effectful::Nil)
+    ::effectful::Cons(::effectful::layer::service::service::<$k, _>($v), ::effectful::Nil)
   };
   (@list $k:ty => $v:expr, $($rest:tt)+) => {
-    ::effectful::Cons(::effectful::service::<$k, _>($v), $crate::ctx!(@list $($rest)+))
+    ::effectful::Cons(::effectful::layer::service::service::<$k, _>($v), $crate::ctx!(@list $($rest)+))
   };
 }

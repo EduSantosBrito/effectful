@@ -4,7 +4,7 @@ Testing async code often means standing up infrastructure, dealing with timing, 
 
 Effect programs can be tested differently. Because an `Effect` is a description of what to do — not the doing itself — you control everything about how it runs. Swap in a test clock. Provide fake services through the `Layer` system. Detect fiber leaks automatically. Run in microseconds instead of seconds.
 
-This chapter covers the testing tools id_effect provides.
+This chapter covers the testing tools effectful provides.
 
 ## What Makes Effects Testable
 

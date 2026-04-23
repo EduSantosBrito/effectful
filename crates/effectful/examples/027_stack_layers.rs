@@ -1,8 +1,10 @@
 //! Ex 027 — `Stack` composes layers into an HList.
-use effectful::{Cons, Layer, LayerFn, Nil, Stack, Tagged, service_key};
+use effectful::{Cons, LayerBuild, LayerFn, Nil, Stack, Tagged, Service};
 
-service_key!(struct AKey);
-service_key!(struct BKey);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct AKey;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct BKey;
 
 fn main() {
   let stack = Stack(

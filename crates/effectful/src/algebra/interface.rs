@@ -152,7 +152,7 @@ pub struct HandlerLayer<I, F> {
   _pd: std::marker::PhantomData<fn() -> I>,
 }
 
-impl<I, F> crate::layer::Layer for HandlerLayer<I, F>
+impl<I, F> crate::layer::LayerBuild for HandlerLayer<I, F>
 where
   I: EffectInterface,
   F: Fn() -> I,
@@ -182,9 +182,10 @@ where
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
   use super::*;
-  use crate::layer::Layer as _;
+  use crate::layer::LayerBuild as _;
   use crate::runtime::run_blocking;
 
   // ── Fixtures ────────────────────────────────────────────────────────────

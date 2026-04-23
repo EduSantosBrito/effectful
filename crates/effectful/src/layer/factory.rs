@@ -12,10 +12,10 @@ use std::rc::Rc;
 use std::sync::Mutex;
 
 /// Produces one heterogeneous cell (usually a [`Tagged`](crate::context::Tagged) or bare value you wrap yourself).
-pub trait Layer {
-  /// Value produced when [`Layer::build`] succeeds.
+pub trait LayerBuild {
+  /// Value produced when [`LayerBuild::build`] succeeds.
   type Output;
-  /// Error type when [`Layer::build`] fails.
+  /// Error type when [`LayerBuild::build`] fails.
   type Error;
   /// Materializes this layer’s output (or error) synchronously.
   fn build(&self) -> Result<Self::Output, Self::Error>;
@@ -72,7 +72,7 @@ where
   }
 }
 
-impl<O, E, R> Layer for LayerEffect<O, E, R>
+impl<O, E, R> LayerBuild for LayerEffect<O, E, R>
 where
   O: Clone + 'static,
   E: Clone + 'static,
@@ -119,7 +119,7 @@ where
 #[derive(Clone, Copy)]
 pub struct LayerFn<F>(pub F);
 
-impl<O, E, F> Layer for LayerFn<F>
+impl<O, E, F> LayerBuild for LayerFn<F>
 where
   F: Fn() -> Result<O, E>,
 {
@@ -135,10 +135,10 @@ where
 #[derive(Clone, Copy)]
 pub struct Stack<A, B>(pub A, pub B);
 
-impl<A, B> Layer for Stack<A, B>
+impl<A, B> LayerBuild for Stack<A, B>
 where
-  A: Layer,
-  B: Layer<Error = A::Error>,
+  A: LayerBuild,
+  B: LayerBuild<Error = A::Error>,
 {
   type Output = Cons<A::Output, Cons<B::Output, Nil>>;
   type Error = A::Error;
@@ -180,9 +180,9 @@ where
 #[derive(Clone, Copy)]
 pub struct StackThen<A, B>(pub A, pub B);
 
-impl<A, B> Layer for StackThen<A, B>
+impl<A, B> LayerBuild for StackThen<A, B>
 where
-  A: Layer,
+  A: LayerBuild,
   B: LayerFrom<A::Output, Error = A::Error>,
 {
   type Output = Cons<A::Output, Cons<B::Output, Nil>>;
@@ -196,7 +196,7 @@ where
 }
 
 /// Extension combinators for transforming layer outputs and errors.
-pub trait LayerExt: Layer + Sized {
+pub trait LayerExt: LayerBuild + Sized {
   /// Maps successful output with `f` after [`Layer::build`].
   fn map<O2, F>(self, f: F) -> MapLayer<Self, F>
   where
@@ -216,7 +216,7 @@ pub trait LayerExt: Layer + Sized {
   /// Runs `self` and `that` and returns both outputs as a pair (fails on first error).
   fn merge<L2>(self, that: L2) -> MergeLayer<Self, L2>
   where
-    L2: Layer<Error = Self::Error>,
+    L2: LayerBuild<Error = Self::Error>,
   {
     MergeLayer {
       left: self,
@@ -227,7 +227,7 @@ pub trait LayerExt: Layer + Sized {
   /// Runs `that` for side effects, discards its output, then runs `self`.
   fn provide<L0>(self, that: L0) -> ProvideLayer<Self, L0>
   where
-    L0: Layer<Error = Self::Error>,
+    L0: LayerBuild<Error = Self::Error>,
   {
     ProvideLayer {
       layer: self,
@@ -238,7 +238,7 @@ pub trait LayerExt: Layer + Sized {
   /// Runs `that` then `self`, returning `(self_output, provider_output)`.
   fn provide_merge<L0>(self, that: L0) -> ProvideMergeLayer<Self, L0>
   where
-    L0: Layer<Error = Self::Error>,
+    L0: LayerBuild<Error = Self::Error>,
   {
     ProvideMergeLayer {
       layer: self,
@@ -281,7 +281,7 @@ pub trait LayerExt: Layer + Sized {
   }
 }
 
-impl<T> LayerExt for T where T: Layer {}
+impl<T> LayerExt for T where T: LayerBuild {}
 
 /// Layer that post-processes another layer’s successful output with `f`.
 pub struct MapLayer<L, F> {
@@ -289,9 +289,9 @@ pub struct MapLayer<L, F> {
   f: F,
 }
 
-impl<L, F, O2> Layer for MapLayer<L, F>
+impl<L, F, O2> LayerBuild for MapLayer<L, F>
 where
-  L: Layer,
+  L: LayerBuild,
   F: Fn(L::Output) -> O2 + Clone,
 {
   type Output = O2;
@@ -308,9 +308,9 @@ pub struct MapErrorLayer<L, F> {
   f: F,
 }
 
-impl<L, F, E2> Layer for MapErrorLayer<L, F>
+impl<L, F, E2> LayerBuild for MapErrorLayer<L, F>
 where
-  L: Layer,
+  L: LayerBuild,
   F: Fn(L::Error) -> E2 + Clone,
 {
   type Output = L::Output;
@@ -327,10 +327,10 @@ pub struct MergeLayer<A, B> {
   right: B,
 }
 
-impl<A, B> Layer for MergeLayer<A, B>
+impl<A, B> LayerBuild for MergeLayer<A, B>
 where
-  A: Layer,
-  B: Layer<Error = A::Error>,
+  A: LayerBuild,
+  B: LayerBuild<Error = A::Error>,
 {
   type Output = (A::Output, B::Output);
   type Error = A::Error;
@@ -345,9 +345,9 @@ pub struct MergeAllLayer<L> {
   layers: Vec<L>,
 }
 
-impl<L> Layer for MergeAllLayer<L>
+impl<L> LayerBuild for MergeAllLayer<L>
 where
-  L: Layer,
+  L: LayerBuild,
 {
   type Output = Vec<L::Output>;
   type Error = L::Error;
@@ -379,7 +379,7 @@ where
 #[inline]
 pub fn merge_all<L>(layers: impl IntoIterator<Item = L>) -> MergeAllLayer<L>
 where
-  L: Layer,
+  L: LayerBuild,
 {
   MergeAllLayer {
     layers: layers.into_iter().collect(),
@@ -392,10 +392,10 @@ pub struct ProvideLayer<L, P> {
   provider: P,
 }
 
-impl<L, P> Layer for ProvideLayer<L, P>
+impl<L, P> LayerBuild for ProvideLayer<L, P>
 where
-  L: Layer,
-  P: Layer<Error = L::Error>,
+  L: LayerBuild,
+  P: LayerBuild<Error = L::Error>,
 {
   type Output = L::Output;
   type Error = L::Error;
@@ -412,10 +412,10 @@ pub struct ProvideMergeLayer<L, P> {
   provider: P,
 }
 
-impl<L, P> Layer for ProvideMergeLayer<L, P>
+impl<L, P> LayerBuild for ProvideMergeLayer<L, P>
 where
-  L: Layer,
-  P: Layer<Error = L::Error>,
+  L: LayerBuild,
+  P: LayerBuild<Error = L::Error>,
 {
   type Output = (L::Output, P::Output);
   type Error = L::Error;
@@ -432,9 +432,9 @@ pub struct ScopedLayer<L> {
   layer: L,
 }
 
-impl<L> Layer for ScopedLayer<L>
+impl<L> LayerBuild for ScopedLayer<L>
 where
-  L: Layer,
+  L: LayerBuild,
 {
   type Output = L::Output;
   type Error = L::Error;

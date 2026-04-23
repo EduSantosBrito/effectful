@@ -66,7 +66,7 @@ pub fn compose<A, B, C>(f: impl Fn(B) -> C, g: impl Fn(A) -> B) -> impl Fn(A) ->
 
 /// `Function.pipe` (unary) — apply `f` to `a`.  Useful for point-free pipelines.
 ///
-/// For multi-step pipelines prefer the [`pipe!`](macro@id_effect_macro::pipe) macro.
+/// For multi-step pipelines prefer the [`pipe!`](macro@effectful_macro::pipe) macro.
 ///
 /// ```rust
 /// use effectful::func::pipe1;

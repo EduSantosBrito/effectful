@@ -1,7 +1,7 @@
 //! Structural data markers — Effect.ts `Data`–style equality and hashing.
 //!
 //! [`EffectData`] is implemented automatically for any type that already implements
-//! [`PartialEq`], [`Eq`], and [`Hash`]. Use the [`EffectData`](id_effect_proc_macro::EffectData)
+//! [`PartialEq`], [`Eq`], and [`Hash`]. Use the [`EffectData`](effectful_proc_macro::EffectData)
 //! derive macro to generate those impls field-wise for your own structs and enums.
 //!
 //! [`DataStruct`] and [`DataTuple`] are newtype wrappers for values you want to treat as

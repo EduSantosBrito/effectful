@@ -5,7 +5,7 @@ A `Schedule` is not just a number of retries or a delay. It's a *policy* — a f
 ## The Core Concept
 
 ```rust
-use id_effect::Schedule;
+use effectful::Schedule;
 
 // A Schedule answers: "Given where we are, should we continue? And after how long?"
 // Input: attempt number, elapsed time, last result
@@ -22,7 +22,7 @@ This abstraction is more powerful than "retry 3 times with 1-second delay." A Sc
 ## Creating Schedules
 
 ```rust
-use id_effect::Schedule;
+use effectful::Schedule;
 
 // Fixed delay: always wait the same amount
 let fixed = Schedule::spaced(Duration::from_secs(1));

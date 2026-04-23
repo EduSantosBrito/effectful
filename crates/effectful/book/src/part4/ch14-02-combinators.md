@@ -5,7 +5,7 @@ A schema is a value that describes how to parse an `Unknown` into a typed result
 ## Primitive Schemas
 
 ```rust
-use id_effect::schema::{string, integer, i64, f64, boolean, null};
+use effectful::schema::{string, integer, i64, f64, boolean, null};
 
 // Parse a string
 let name_schema = string();
@@ -25,7 +25,7 @@ Each schema has type `Schema<T>` — `string()` is a `Schema<String>`, `i64()` i
 ## Struct Schemas
 
 ```rust
-use id_effect::schema::struct_;
+use effectful::schema::struct_;
 
 #[derive(Debug)]
 struct User {
@@ -44,7 +44,7 @@ let user_schema = struct_!(User {
 For schemas without a derive macro, use `object`:
 
 ```rust
-use id_effect::schema::object;
+use effectful::schema::object;
 
 let user_schema = object([
     ("name", string().map(|s| s)),
@@ -55,7 +55,7 @@ let user_schema = object([
 ## Optional Fields
 
 ```rust
-use id_effect::schema::optional;
+use effectful::schema::optional;
 
 struct Config {
     host:    String,
@@ -75,7 +75,7 @@ let config_schema = struct_!(Config {
 ## Array Schemas
 
 ```rust
-use id_effect::schema::array;
+use effectful::schema::array;
 
 // Vec of strings
 let tags_schema: Schema<Vec<String>> = array(string());
@@ -89,7 +89,7 @@ let users_schema: Schema<Vec<User>> = array(user_schema);
 ## Union Schemas
 
 ```rust
-use id_effect::schema::{union_, literal_string};
+use effectful::schema::{union_, literal_string};
 
 #[derive(Debug)]
 enum Status { Active, Inactive, Pending }
@@ -122,7 +122,7 @@ let email_schema: Schema<Email> = string().try_map(|s| {
 ## Running a Schema
 
 ```rust
-use id_effect::schema::parse;
+use effectful::schema::parse;
 
 let raw: Unknown = Unknown::from_json_str(r#"{"name":"Alice","age":30}"#)?;
 

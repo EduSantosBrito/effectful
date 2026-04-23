@@ -1,11 +1,11 @@
 # ParseErrors — Structured Error Accumulation
 
-When a user submits a form with five invalid fields, they deserve to know about all five — not just the first one you found. `ParseErrors` is id_effect's solution: errors accumulate across an entire parse, and you report them all at once.
+When a user submits a form with five invalid fields, they deserve to know about all five — not just the first one you found. `ParseErrors` is effectful's solution: errors accumulate across an entire parse, and you report them all at once.
 
 ## ParseError vs ParseErrors
 
 ```rust
-use id_effect::schema::{ParseError, ParseErrors};
+use effectful::schema::{ParseError, ParseErrors};
 
 // One error
 let e: ParseError = ParseError::custom("age must be positive");

@@ -1,11 +1,11 @@
 # Stacking Layers — Composition Patterns
 
-Individual layers do one thing. A real application needs them composed. id_effect provides two composition patterns: sequential stacking and parallel merging.
+Individual layers do one thing. A real application needs them composed. effectful provides two composition patterns: sequential stacking and parallel merging.
 
 ## Sequential Stacking with .stack()
 
 ```rust
-use id_effect::Stack;
+use effectful::Stack;
 
 let app_env = config_layer
     .stack(db_layer)       // Config → (Config, Database)
@@ -22,7 +22,7 @@ Each `.stack()` takes the output of the previous layer and combines it with the 
 When layers don't depend on each other, they can be built in parallel:
 
 ```rust
-use id_effect::merge_all;
+use effectful::merge_all;
 
 // These three layers are independent — build them concurrently
 let monitoring = merge_all!(

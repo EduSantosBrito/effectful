@@ -1,9 +1,9 @@
-//! [`MapConfigProvider`] with [`id_effect_config::config`] helpers (nested keys, defaults).
+//! [`MapConfigProvider`] with [`effectful_config::config`] helpers (nested keys, defaults).
 
-use id_effect_config::MapConfigProvider;
-use id_effect_config::config;
+use effectful_config::MapConfigProvider;
+use effectful_config::config;
 
-fn main() -> Result<(), id_effect_config::ConfigError> {
+fn main() -> Result<(), effectful_config::ConfigError> {
   let p = MapConfigProvider::from_pairs([("SERVICE_HOST", "localhost"), ("SERVICE_NAME", "demo")]);
 
   let host = config::nested_string(&p, "SERVICE", "HOST")?;

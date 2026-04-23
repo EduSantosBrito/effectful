@@ -5,7 +5,7 @@ A `Tag` is a zero-sized type that acts as a compile-time name for a value. It as
 ## What Is a Tag?
 
 ```rust
-use id_effect::{Tag, Tagged, tagged};
+use effectful::{Tag, Tagged, tagged};
 
 // A Tag is a zero-sized type with an associated Value type
 struct DatabaseTag;
@@ -62,7 +62,7 @@ The compiler distinguishes them. You can't accidentally swap the database and ca
 In practice, you don't implement `Tag` by hand. The `service_key!` macro generates the boilerplate:
 
 ```rust
-use id_effect::service_key;
+use effectful::service_key;
 
 service_key!(DatabaseKey: Pool);
 service_key!(CacheKey: Pool);

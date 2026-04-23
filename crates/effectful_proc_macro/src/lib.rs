@@ -10,6 +10,7 @@ mod effect_tagged;
 mod expand;
 mod parse;
 mod service_derive;
+mod tagged_error_derive;
 mod transform;
 
 use proc_macro::TokenStream;
@@ -51,9 +52,36 @@ pub fn effect_tagged(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// let env = Database { url: "...".into() }.to_context();
 /// let db: &Database = env.get::<Database>();
 /// ```
-#[proc_macro_derive(Service)]
+#[proc_macro_derive(Service, attributes(service))]
 pub fn derive_service(input: TokenStream) -> TokenStream {
   service_derive::derive_service(input)
+}
+
+/// Derive macro: implements [`TaggedError`] and generates tag constants.
+///
+/// Use `#[tag("...")]` on each variant to specify the tag string. Defaults to
+/// lowercase variant name.
+///
+/// Generates associated constants in SCREAMING_SNAKE_CASE for IDE autocomplete.
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(TaggedError, Debug, Clone)]
+/// enum AppError {
+///     #[tag("validation")]
+///     ValidationError { field: String },
+///     #[tag("network")]
+///     NetworkError { status: u16 },
+/// }
+///
+/// // Use with catch_tags:
+/// tags.on(AppError::VALIDATION, |e| { ... })
+///     .on(AppError::NETWORK, |e| { ... })
+/// ```
+#[proc_macro_derive(TaggedError, attributes(tag))]
+pub fn derive_tagged_error(input: TokenStream) -> TokenStream {
+  tagged_error_derive::derive_tagged_error(input)
 }
 
 /// Procedural do-notation macro for [`effectful::Effect`].

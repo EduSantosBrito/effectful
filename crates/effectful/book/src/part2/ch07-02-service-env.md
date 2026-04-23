@@ -5,7 +5,7 @@
 ## service_env: Access a Service
 
 ```rust
-use id_effect::{service_env, ServiceEnv};
+use effectful::{service_env, ServiceEnv};
 
 // Access a service and use it
 fn get_user(id: u64) -> Effect<User, DbError, ServiceEnv<UserRepositoryTag>> {

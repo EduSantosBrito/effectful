@@ -9,7 +9,7 @@
 
 use crate::context::{Cons, Context, Nil, Tagged, ThereHere};
 use crate::kernel::{Effect, fail, pure, succeed};
-use crate::layer::{Layer, LayerFn, Stack};
+use crate::layer::{LayerBuild, LayerFn, Stack};
 use crate::scheduling::duration::duration;
 use crate::scheduling::schedule::Schedule;
 use crate::schema::equal::equals;

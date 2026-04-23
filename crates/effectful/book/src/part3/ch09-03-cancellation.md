@@ -1,6 +1,6 @@
 # Cancellation — Interrupting Gracefully
 
-Cancellation in async code is notoriously difficult to get right. id_effect makes it explicit and cooperative.
+Cancellation in async code is notoriously difficult to get right. effectful makes it explicit and cooperative.
 
 ## The Model: Cooperative Cancellation
 
@@ -9,7 +9,7 @@ Fibers aren't forcibly killed. They're *interrupted* — given a signal to stop 
 The simplest yield point is `check_interrupt`:
 
 ```rust
-use id_effect::check_interrupt;
+use effectful::check_interrupt;
 
 effect! {
     for chunk in large_dataset.chunks(1000) {
@@ -27,7 +27,7 @@ Every `~` binding is also an implicit yield point. If a fiber is interrupted whi
 For external cancellation (e.g., from HTTP request handlers or UI cancel buttons):
 
 ```rust
-use id_effect::CancellationToken;
+use effectful::CancellationToken;
 
 // Create a cancellation token
 let token = CancellationToken::new();
@@ -89,7 +89,7 @@ Because effect finalizers run on interruption, all resources are cleaned up as f
 Some operations shouldn't be interrupted mid-way (e.g., writing to a database inside a transaction). Mark them uninterruptible:
 
 ```rust
-use id_effect::uninterruptible;
+use effectful::uninterruptible;
 
 // This block runs to completion even if interrupted
 let committed = uninterruptible(effect! {

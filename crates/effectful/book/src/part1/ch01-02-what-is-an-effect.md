@@ -17,7 +17,7 @@ An `Effect` is a recipe for a computation.
 When you write `succeed(42)`, you're not "succeeding" at anything. You're writing down a recipe that says "when executed, produce the value 42." The 42 doesn't exist yet. No computation has happened. You just have a piece of paper with instructions on it.
 
 ```rust
-use id_effect::{Effect, succeed};
+use effectful::{Effect, succeed};
 
 // This doesn't compute anything — it's a description
 let recipe: Effect<i32, String, ()> = succeed(42);
@@ -29,7 +29,7 @@ let recipe: Effect<i32, String, ()> = succeed(42);
 The computation only happens when you explicitly run it:
 
 ```rust
-use id_effect::run_blocking;
+use effectful::run_blocking;
 
 // NOW something happens
 let result: Result<i32, String> = run_blocking(recipe);
@@ -60,7 +60,7 @@ The `.map()` call didn't execute anything. It took one recipe and produced a new
 Let's see what this looks like with actual I/O:
 
 ```rust
-use id_effect::{Effect, effect, run_blocking};
+use effectful::{Effect, effect, run_blocking};
 
 // This function doesn't fetch anything — it returns a DESCRIPTION
 // of how to fetch a user

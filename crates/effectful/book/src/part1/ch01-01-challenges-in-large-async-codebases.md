@@ -2,7 +2,7 @@
 
 Async Rust gives you non-blocking I/O and structured concurrency primitives. In production, the same strengths can become painful when **composition** and **boundaries** are not planned: errors, dependencies, and spawned work all tend to accumulate complexity.
 
-This section is not a claim that “async is broken.” It is a concise picture of problems **id_effect** is meant to help with—so the rest of the book has a shared vocabulary.
+This section is not a claim that “async is broken.” It is a concise picture of problems **effectful** is meant to help with—so the rest of the book has a shared vocabulary.
 
 ## Challenge 1: Error mapping and noise
 

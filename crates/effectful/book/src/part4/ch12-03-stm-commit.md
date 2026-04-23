@@ -5,7 +5,7 @@ The `stm!` macro produces `Stm<A>` values — descriptions of transactional comp
 ## commit: Lift Stm into Effect
 
 ```rust
-use id_effect::{commit, Stm, Effect};
+use effectful::{commit, Stm, Effect};
 
 let transaction: Stm<i32> = stm! {
     let a = ~ ref_a.read_stm();
@@ -25,7 +25,7 @@ let result = run_blocking(effect)?;
 ## atomically: Direct Execution
 
 ```rust
-use id_effect::atomically;
+use effectful::atomically;
 
 // Run a transaction immediately in the current context
 let value: i32 = atomically(stm! {
@@ -41,7 +41,7 @@ let value: i32 = atomically(stm! {
 Transactions can fail with typed errors:
 
 ```rust
-use id_effect::stm;
+use effectful::stm;
 
 fn withdraw(account: &TRef<u64>, amount: u64) -> Stm<u64> {
     stm! {

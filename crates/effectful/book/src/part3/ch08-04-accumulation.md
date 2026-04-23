@@ -21,7 +21,7 @@ For form validation or batch imports, you want to report all errors to the user,
 `validate_all` runs a collection of effects and accumulates all failures:
 
 ```rust
-use id_effect::validate_all;
+use effectful::validate_all;
 
 let results = validate_all(vec![
     validate_name(&input.name),
@@ -38,7 +38,7 @@ If any validations fail, all errors are collected and returned as a `Vec`. If al
 `partition` runs effects and splits the results into successes and failures:
 
 ```rust
-use id_effect::partition;
+use effectful::partition;
 
 let (successes, failures): (Vec<User>, Vec<ImportError>) =
     run_blocking(partition(records.iter().map(import_record)))?;
@@ -53,7 +53,7 @@ println!("{} imported, {} failed", successes.len(), failures.len());
 When composing effects with different error types, `Or` avoids flattening into a single error type before you're ready:
 
 ```rust
-use id_effect::Or;
+use effectful::Or;
 
 // Instead of converting both to AppError immediately:
 type BothErrors = Or<DbError, NetworkError>;

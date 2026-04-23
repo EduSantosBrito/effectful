@@ -1,10 +1,13 @@
-//! Ex 031 — `service` wraps a value as `Tagged<K, V>`.
-use effectful::{service, service_key};
+//! Ex 031 — a service value wraps itself in `ServiceContext`.
+use effectful::Service;
 
-service_key!(struct PortKey);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct Port {
+  value: u16,
+}
 
 fn main() {
-  let cell = service::<PortKey, _>(8080_u16);
-  assert_eq!(cell.value, 8080);
+  let context = Port { value: 8080 }.to_context();
+  assert_eq!(context.get::<Port>().map(|port| port.value), Some(8080));
   println!("031_service_constructor ok");
 }

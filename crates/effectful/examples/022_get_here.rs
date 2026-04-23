@@ -1,7 +1,8 @@
 //! Ex 022 — `Get::<K>::get` reads the head cell.
-use effectful::{Get, ctx, service_key};
+use effectful::{Get, Service, ctx};
 
-service_key!(struct K);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct K;
 
 fn main() {
   let env = ctx!(K => "here");

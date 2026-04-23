@@ -6,7 +6,7 @@ The naive approach is to deserialise first and validate later — accept a `User
 
 The better approach is *parse, don't validate*: transform untrusted input into trusted types in one step. If the parse succeeds, you have a valid `User`. If it fails, you have a structured `ParseError` that tells you exactly what was wrong.
 
-id_effect's `schema` module is built on this principle.
+effectful's `schema` module is built on this principle.
 
 ## What This Chapter Covers
 

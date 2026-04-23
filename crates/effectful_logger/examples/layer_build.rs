@@ -1,11 +1,11 @@
-//! Build the logger layer with [`id_effect_logger::layer_effect_logger`]
+//! Build the logger layer with [`effectful_logger::layer_effect_logger`]
 //! ([`effectful::layer_service`] / Effect.ts `Layer.succeed`), then assemble a
 //! [`Context`] and run an effect that extracts `EffectLogger` via `bind* EffectLogger`.
 //!
 //! Run: `devenv shell -- cargo run -p logger --example layer_build`
 
 use ::effectful::{Cons, Context, Effect, Layer, Nil, Service, effect, run_blocking};
-use id_effect_logger::{EffectLogKey, EffectLogger, EffectLoggerError, layer_effect_logger};
+use effectful_logger::{EffectLogKey, EffectLogger, EffectLoggerError, layer_effect_logger};
 
 type LogEnv = Context<Cons<Service<EffectLogKey, EffectLogger>, Nil>>;
 

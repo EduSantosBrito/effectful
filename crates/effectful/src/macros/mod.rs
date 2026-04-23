@@ -11,4 +11,5 @@ pub mod effect {
   pub use effectful_proc_macro::effect;
 }
 
+#[allow(deprecated)]
 pub use effectful_macro::{ctx, err, layer_graph, layer_node, pipe, req, service_def, service_key};

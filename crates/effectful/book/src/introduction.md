@@ -6,7 +6,7 @@ If you already use async Rust, you know the model: `Future`s are polled by an ex
 
 What teams often hit next is **organization at scale**: error types that grow without structure, dependencies threaded through long call chains, and background work whose lifetime is hard to reason about. Those problems are not unique to Rust, but they show up in every non-trivial async codebase.
 
-**id_effect** is a library for writing async programs where the **shape** of the work—success type, error type, and required environment—is carried in one place, and where much of the program is built as **composable descriptions** (`Effect<A, E, R>`) that you run only when you choose how and with which dependencies.
+**effectful** is a library for writing async programs where the **shape** of the work—success type, error type, and required environment—is carried in one place, and where much of the program is built as **composable descriptions** (`Effect<A, E, R>`) that you run only when you choose how and with which dependencies.
 
 You still run on ordinary async runtimes. You still use `.await` inside bridges to third-party code. What changes is how you **structure** domain logic, tests, and dependency boundaries.
 

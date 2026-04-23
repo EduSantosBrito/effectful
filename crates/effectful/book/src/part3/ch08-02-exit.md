@@ -5,7 +5,7 @@ Every effect execution ends with an `Exit`. It's the final word on what happened
 ## The Exit Type
 
 ```rust
-use id_effect::Exit;
+use effectful::Exit;
 
 enum Exit<E, A> {
     Success(A),         // Effect completed, produced A
@@ -16,7 +16,7 @@ enum Exit<E, A> {
 `Exit` combines the success type and the full failure taxonomy. It's what you get when you use `run_to_exit` instead of `run_blocking`:
 
 ```rust
-use id_effect::run_to_exit;
+use effectful::run_to_exit;
 
 // run_blocking returns Result<A, E> — loses Cause::Die and Cause::Interrupt info
 let user: Result<User, DbError> = run_blocking(get_user(1))?;

@@ -5,7 +5,7 @@
 ## retry: On Failure, Try Again
 
 ```rust
-use id_effect::Schedule;
+use effectful::Schedule;
 
 let result = flaky_api_call()
     .retry(Schedule::exponential(Duration::from_millis(100)).take(3));

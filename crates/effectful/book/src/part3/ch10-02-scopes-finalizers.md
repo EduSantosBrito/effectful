@@ -5,7 +5,7 @@ A `Scope` is a region of execution with a finalizer registry. Any cleanup effect
 ## Creating a Scope
 
 ```rust
-use id_effect::{Scope, Finalizer, scoped};
+use effectful::{Scope, Finalizer, scoped};
 
 let result = scoped(|scope| {
     effect! {

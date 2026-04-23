@@ -1,6 +1,6 @@
 # API Quick Reference
 
-A condensed reference for the most commonly used types and functions in id_effect. For full documentation, use `cargo doc --open -p id_effect`.
+A condensed reference for the most commonly used types and functions in effectful. For full documentation, use `cargo doc --open -p effectful`.
 
 ## Core Types
 

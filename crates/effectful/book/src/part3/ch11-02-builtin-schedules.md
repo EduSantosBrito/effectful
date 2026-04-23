@@ -1,6 +1,6 @@
 # Built-in Schedules — exponential, fibonacci, forever
 
-id_effect provides a library of common schedule types. This section catalogs them with typical use cases.
+effectful provides a library of common schedule types. This section catalogs them with typical use cases.
 
 ## exponential
 

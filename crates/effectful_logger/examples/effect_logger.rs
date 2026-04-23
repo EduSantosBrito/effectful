@@ -5,7 +5,7 @@
 //! Run: `RUST_LOG=debug devenv shell -- cargo run -p logger --example effect_logger`
 
 use ::effectful::run_blocking;
-use id_effect_logger::{EffectLogger, LogLevel};
+use effectful_logger::{EffectLogger, LogLevel};
 
 fn main() {
   tracing_subscriber::fmt()

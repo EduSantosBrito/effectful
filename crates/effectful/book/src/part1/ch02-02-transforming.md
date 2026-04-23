@@ -7,7 +7,7 @@ You have an effect. It produces some value. But you want a different value — o
 `map` transforms the success value without running any new effects:
 
 ```rust
-use id_effect::{succeed, Effect};
+use effectful::{succeed, Effect};
 
 let number: Effect<i32, String, ()> = succeed(21);
 let doubled: Effect<i32, String, ()> = number.map(|n| n * 2);
@@ -31,7 +31,7 @@ The `E` (error type) and `R` (requirements) stay the same. `.map` touches only t
 `map_error` transforms the failure type, leaving the success path untouched:
 
 ```rust
-use id_effect::fail;
+use effectful::fail;
 
 #[derive(Debug)]
 struct AppError(String);

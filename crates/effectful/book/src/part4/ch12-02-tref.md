@@ -1,11 +1,11 @@
 # TRef — Transactional References
 
-`TRef<T>` is the fundamental mutable cell in id_effect's STM system. It wraps a value that can be read and written inside transactions.
+`TRef<T>` is the fundamental mutable cell in effectful's STM system. It wraps a value that can be read and written inside transactions.
 
 ## Creating a TRef
 
 ```rust
-use id_effect::TRef;
+use effectful::TRef;
 
 let counter: TRef<i32> = TRef::new(0);
 let balance: TRef<f64> = TRef::new(1000.0);
@@ -18,7 +18,7 @@ let balance: TRef<f64> = TRef::new(1000.0);
 All TRef operations return `Stm<_>` — transactional descriptions, not effects. They only work inside `stm!` (or when run through `commit`/`atomically`):
 
 ```rust
-use id_effect::{TRef, stm};
+use effectful::{TRef, stm};
 
 let counter = TRef::new(0);
 
@@ -39,7 +39,7 @@ These are descriptions. Nothing happens until they're committed.
 The `stm!` macro provides do-notation for composing `Stm` operations, exactly like `effect!` does for `Effect`:
 
 ```rust
-use id_effect::{stm, TRef};
+use effectful::{stm, TRef};
 
 let counter = TRef::new(0_i32);
 let total   = TRef::new(0_i32);

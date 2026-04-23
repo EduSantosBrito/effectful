@@ -18,7 +18,7 @@ let program = step_a()
 
 Two steps: readable. Five steps: a pyramid. Ten steps: indistinguishable from callback hell.
 
-Haskell solved this decades ago with *do-notation*. Scala's for-comprehensions do the same thing. Rust doesn't have built-in do-notation, so id_effect provides it via a macro.
+Haskell solved this decades ago with *do-notation*. Scala's for-comprehensions do the same thing. Rust doesn't have built-in do-notation, so effectful provides it via a macro.
 
 ## Do-Notation as a Concept
 
@@ -34,7 +34,7 @@ do
 
 Each `←` means "run this effect and bind its result to this name." If any step fails, the whole computation short-circuits.
 
-Rust can't use the `←` symbol, so id_effect uses `~` (prefix tilde):
+Rust can't use the `←` symbol, so effectful uses `~` (prefix tilde):
 
 ```rust
 effect! {

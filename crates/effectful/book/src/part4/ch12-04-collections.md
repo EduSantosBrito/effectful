@@ -1,11 +1,11 @@
 # TQueue, TMap, TSemaphore — Transactional Collections
 
-id_effect provides STM-aware versions of common collection types. They compose with other STM operations and integrate with `stm!`.
+effectful provides STM-aware versions of common collection types. They compose with other STM operations and integrate with `stm!`.
 
 ## TQueue: Bounded Transactional Queue
 
 ```rust
-use id_effect::TQueue;
+use effectful::TQueue;
 
 let queue: TQueue<Job> = TQueue::bounded(100);
 
@@ -49,7 +49,7 @@ fn consumer(queue: Arc<TQueue<Job>>) -> Effect<Never, Never, ()> {
 ## TMap: Transactional Hash Map
 
 ```rust
-use id_effect::TMap;
+use effectful::TMap;
 
 let map: TMap<String, User> = TMap::new();
 
@@ -75,7 +75,7 @@ commit(stm! {
 ## TSemaphore: Transactional Semaphore
 
 ```rust
-use id_effect::TSemaphore;
+use effectful::TSemaphore;
 
 // Create a semaphore with 10 permits
 let sem: TSemaphore = TSemaphore::new(10);

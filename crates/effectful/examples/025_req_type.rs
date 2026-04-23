@@ -1,8 +1,10 @@
 //! Ex 025 — `req!` names the environment type for services.
-use effectful::{Get, ThereHere, ctx, effect, req, run_blocking, service_key};
+use effectful::{Get, ThereHere, Service, ctx, effect, req, run_blocking};
 
-service_key!(struct HostKey);
-service_key!(struct PortKey);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct HostKey;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct PortKey;
 
 type Env = req!(HostKey: &'static str | PortKey: u16);
 

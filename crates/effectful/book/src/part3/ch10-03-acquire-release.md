@@ -5,7 +5,7 @@
 ## The Pattern
 
 ```rust
-use id_effect::acquire_release;
+use effectful::acquire_release;
 
 let managed_connection = acquire_release(
     // Acquire: run this to get the resource

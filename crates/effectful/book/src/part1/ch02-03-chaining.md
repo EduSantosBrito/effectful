@@ -50,7 +50,7 @@ This is where the `effect!` macro comes in.
 The `effect!` macro turns `flat_map` chains into readable sequential code using the `~` operator:
 
 ```rust
-use id_effect::effect;
+use effectful::effect;
 
 let program: Effect<Page, AppError, Database> = effect! {
     let user  = ~ get_user(1).map_error(AppError::Db);

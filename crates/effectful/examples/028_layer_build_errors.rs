@@ -1,7 +1,8 @@
 //! Ex 028 — Failed layers propagate `Err` from `build`.
-use effectful::{Layer, LayerFn, Tagged, service_key};
+use effectful::{LayerBuild, LayerFn, Tagged, Service};
 
-service_key!(struct K);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct K;
 
 fn main() {
   let bad = LayerFn(|| Err::<Tagged<K, u8>, &'static str>("no"));

@@ -11,12 +11,12 @@ Consumer: processes 1,000 events/sec
 What happens to the 9,000 surplus events per second?
 ```
 
-Your options are: block the producer, drop events, or buffer them. Each is correct in different contexts. id_effect makes the choice explicit via `BackpressurePolicy`.
+Your options are: block the producer, drop events, or buffer them. Each is correct in different contexts. effectful makes the choice explicit via `BackpressurePolicy`.
 
 ## BackpressurePolicy
 
 ```rust
-use id_effect::BackpressurePolicy;
+use effectful::BackpressurePolicy;
 
 // Block the producer until the consumer catches up (default for bounded channels)
 BackpressurePolicy::Block
@@ -36,7 +36,7 @@ BackpressurePolicy::Unbounded
 The most common place to specify backpressure is when bridging from a channel to a `Stream`:
 
 ```rust
-use id_effect::{stream_from_channel_with_policy, BackpressurePolicy};
+use effectful::{stream_from_channel_with_policy, BackpressurePolicy};
 use std::sync::mpsc;
 
 let (tx, rx) = mpsc::channel::<Event>();

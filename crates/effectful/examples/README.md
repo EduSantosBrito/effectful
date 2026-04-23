@@ -2,8 +2,8 @@
 
 Examples are named `NNN_slug.rs` (three-digit order + short topic). Run from the repo root, for example:
 
-- `cargo run -p id_effect --example 001_effect_value`
-- `cargo run -p id_effect_tokio --example 109_tokio_end_to_end`
+- `cargo run -p effectful --example 001_effect_value`
+- `cargo run -p effectful_tokio --example 109_tokio_end_to_end`
 
 ## Spine (`effect` crate, 001–105)
 
@@ -26,7 +26,7 @@ Examples are named `NNN_slug.rs` (three-digit order + short topic). Run from the
 | 093–099 | `093_tracing_install` … `099_snapshot_corpus` | tracing + test harness |
 | 100–105 | `100_channel_queue` … `105_match_matcher` | `Channel`, `PubSub`, pool, cache, `Matcher` |
 
-## Tokio adapter (`id_effect_tokio`, 106–109)
+## Tokio adapter (`effectful_tokio`, 106–109)
 
 | # | File | Topic |
 |---|------|--------|

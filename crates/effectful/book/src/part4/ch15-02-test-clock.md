@@ -20,7 +20,7 @@ Multiply this by dozens of tests and your suite is unusable. `TestClock` makes i
 ## run_test_with_clock
 
 ```rust
-use id_effect::{run_test_with_clock, TestClock};
+use effectful::{run_test_with_clock, TestClock};
 
 #[test]
 fn retry_exhaustion_fast() {

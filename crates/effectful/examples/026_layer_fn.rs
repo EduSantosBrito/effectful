@@ -1,7 +1,8 @@
 //! Ex 026 — `LayerFn` builds one layer cell.
-use effectful::{Layer, LayerFn, Tagged, service_key};
+use effectful::{LayerBuild, LayerFn, Tagged, Service};
 
-service_key!(struct SeedKey);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct SeedKey;
 
 fn main() {
   let layer = LayerFn(|| Ok::<Tagged<SeedKey, u32>, ()>(Tagged::<SeedKey, _>::new(42_u32)));

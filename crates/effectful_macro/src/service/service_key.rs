@@ -13,6 +13,10 @@
 /// type PgPoolSvc = effectful::Service<PgPoolKey, sqlx::PgPool>;
 /// ```
 #[macro_export]
+#[deprecated(
+  since = "0.2.0",
+  note = "Use `#[derive(Service)]` instead. `service_key!` will be removed in a future release."
+)]
 macro_rules! service_key {
   ($(#[$m:meta])* $vis:vis struct $name:ident) => {
     $(#[$m])*

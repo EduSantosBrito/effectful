@@ -7,7 +7,7 @@
 `Context` is built from two constructors:
 
 ```rust
-use id_effect::{Context, Cons, Nil, Tagged};
+use effectful::{Context, Cons, Nil, Tagged};
 
 // An empty context
 type Empty = Nil;
@@ -26,7 +26,7 @@ type WithDbAndLogger = Cons<Tagged<DatabaseKey>, Cons<Tagged<LoggerKey>, Nil>>;
 Manually building `Cons` chains is verbose. The `ctx!` macro handles it:
 
 ```rust
-use id_effect::ctx;
+use effectful::ctx;
 
 let env: Context<Cons<Tagged<DatabaseKey>, Cons<Tagged<LoggerKey>, Nil>>> = ctx!(
     tagged::<DatabaseKey>(my_pool),
@@ -37,7 +37,7 @@ let env: Context<Cons<Tagged<DatabaseKey>, Cons<Tagged<LoggerKey>, Nil>>> = ctx!
 Or use `prepend_cell` manually if you need to add to an existing context:
 
 ```rust
-use id_effect::prepend_cell;
+use effectful::prepend_cell;
 
 let base = ctx!(tagged::<LoggerKey>(my_logger));
 let full = prepend_cell(tagged::<DatabaseKey>(my_pool), base);
@@ -76,7 +76,7 @@ This is what makes `R` stable under refactoring: adding a new service to the con
 In real application code, you rarely construct `Context` directly. Layers (Chapter 6) build it for you. Services (Chapter 7) access it through `NeedsX` bounds. You interact with `Context` directly mostly in:
 
 - Manual test environments (constructing a test `Context` with mock services)
-- Integration points where you're bridging an existing application to id_effect
+- Integration points where you're bridging an existing application to effectful
 - Internal library utilities that manipulate context directly
 
 For everything else, the layer and service machinery handles construction automatically.

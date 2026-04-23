@@ -1,6 +1,6 @@
 # Stratum 13 — `schema/` submodule specification (@TESTING.md)
 
-This document specifies the **Schema**, **Data**, and related **structural validation** subsystem implemented under [`crates/id_effect/src/schema/`](./). It is a **normative design and delivery plan** for reaching **feature parity** with **Effect.ts `@effect/schema`** (as exposed from the **`effect`** npm package’s `Schema` module), and for **optional extensions** idiomatic to Rust.
+This document specifies the **Schema**, **Data**, and related **structural validation** subsystem implemented under [`crates/effectful/src/schema/`](./). It is a **normative design and delivery plan** for reaching **feature parity** with **Effect.ts `@effect/schema`** (as exposed from the **`effect`** npm package’s `Schema` module), and for **optional extensions** idiomatic to Rust.
 
 **Authoritative testing contract:** All behavior described here is **not delivered** until it is covered by tests that obey the repository-root **[`TESTING.md`](../../../../TESTING.md)** (relative to this file: four levels up to the monorepo root). That document governs **TDD/BDD naming**, **module test trees**, **`rstest`**, **branch and mutation coverage**, **async tests**, and **integration** policy. This spec explicitly references **`@TESTING.md`** in every section heading as a reminder that **no merge is complete without `TESTING.md` compliance.**
 
@@ -13,7 +13,7 @@ This document specifies the **Schema**, **Data**, and related **structural valid
 ### 1.1 Primary goals (@TESTING.md)
 
 - **Parity:** Provide a **primary**, **idiomatic Rust API** for defining **schemas**—bidirectional **decode** / **encode** between a **semantic type** `A` and a **wire / encoded type** `I`, plus **decoding from dynamically shaped trees** (`Unknown` today)—such that typical **Effect.ts `Schema` examples** (structs, unions, transforms, recursion, refinements) have a **direct, documented Rust equivalent**.
-- **Data:** Keep **`EffectData`** (derive via `id_effect_proc_macro::EffectData`) as the **standard “dataclass” story** (structural `PartialEq` / `Eq` / `Hash`); **integrate** schemas so users do not maintain two unrelated models.
+- **Data:** Keep **`EffectData`** (derive via `effectful_proc_macro::EffectData`) as the **standard “dataclass” story** (structural `PartialEq` / `Eq` / `Hash`); **integrate** schemas so users do not maintain two unrelated models.
 - **Single source of truth:** Schemas should be the **default** way to declare validated structured data at boundaries (config, IPC, JSON), superseding ad-hoc parsing where feasible.
 
 **Delivery (`@TESTING.md`):** For each goal, maintain **acceptance tests** named under **BDD conventions** in [`TESTING.md`](../../../../TESTING.md) (§BDD-Style Test Naming): e.g. `decode_when_input_matches_schema_returns_ok`, `round_trip_when_encode_then_decode_preserves_value`. Track parity scenarios in a **dedicated test module tree** (§Module Test Trees).
@@ -70,7 +70,7 @@ This document specifies the **Schema**, **Data**, and related **structural valid
 
 - **Arity:** `struct_` / `tuple` cover **two** components; `struct3` / `tuple3` cover **three**. Effect.ts allows **arbitrary** arity—**derive** / **macros** / **HList** still needed for general structs and longer tuples without combinator explosion.
 - **Primitives:** Core exposes **`i64`**, **`String`**, **`bool_`**, **`f64`** (see tests in `parse.rs` per **`TESTING.md`**). **Integer width** policy for JSON (`I64` only in `Unknown`) is unchanged; very large integers may still stringify at the JSON bridge.
-- **`Unknown`:** Has **`Null`**, **`Bool`**, **`I64`**, **`F64`**, **`String`**, **`Array`**, **`Object`**. JSON bridges (`id_effect_axum`, `id_effect_reqwest`) map non-integer **`serde_json::Number`** values to **`F64`**.
+- **`Unknown`:** Has **`Null`**, **`Bool`**, **`I64`**, **`F64`**, **`String`**, **`Array`**, **`Object`**. JSON bridges (`effectful_axum`, `effectful_reqwest`) map non-integer **`serde_json::Number`** values to **`F64`**.
 - **Unions:** `union_` is **binary try/fallback** with the **same semantic type** and **`Unknown` wire**—not a general **sum type** or **discriminated union**.
 - **Recursion:** No **`suspend`** / lazy schema for recursive ADTs.
 - **Async / `Effect`:** Decoders are **synchronous** `Result`; Effect.ts supports **async** / **`Effect`-returning** `transformOrFail`.
@@ -297,9 +297,9 @@ This document specifies the **Schema**, **Data**, and related **structural valid
 ### 10.2 Documentation (@TESTING.md)
 
 - This **`SPEC.md`** and **`../../SPEC.md`** cross-link; **module-level `//!` docs** in `schema/*.rs` summarize public API.
-- **Examples** in `crates/id_effect/examples/` reference new combinators with **runnable** code.
+- **Examples** in `crates/effectful/examples/` reference new combinators with **runnable** code.
 
-**Delivery (`@TESTING.md`):** **Doc examples** are **tested** if the workspace uses **doctest**—otherwise **example binaries** serve as the contract (verify with `cargo test -p id_effect` / CI).
+**Delivery (`@TESTING.md`):** **Doc examples** are **tested** if the workspace uses **doctest**—otherwise **example binaries** serve as the contract (verify with `cargo test -p effectful` / CI).
 
 ---
 
@@ -334,7 +334,7 @@ This document specifies the **Schema**, **Data**, and related **structural valid
 | External systems | §Integration Tests |
 | Coverage gates | §Coverage Goals |
 
-**Delivery (`@TESTING.md`):** Reviewers use this table as a **checklist** for every PR touching `crates/id_effect/src/schema/`.
+**Delivery (`@TESTING.md`):** Reviewers use this table as a **checklist** for every PR touching `crates/effectful/src/schema/`.
 
 ---
 

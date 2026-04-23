@@ -1,6 +1,6 @@
 # Why Effects?
 
-Before we write effect code in detail, it helps to agree on **what problem we are solving** and **where id_effect sits** relative to ordinary async Rust.
+Before we write effect code in detail, it helps to agree on **what problem we are solving** and **where effectful sits** relative to ordinary async Rust.
 
 Rust’s async model is built on `Future` and executors: futures are lazy until polled, and `.await` is how async functions compose. That model is not a mistake—it is the standard way to express non-blocking I/O and concurrency.
 

@@ -5,7 +5,7 @@ For small applications, manually stacking layers in the right order is fine. For
 ## Declaring a Layer Graph
 
 ```rust
-use id_effect::{LayerGraph, LayerNode};
+use effectful::{LayerGraph, LayerNode};
 
 let graph = LayerGraph::new()
     .add(LayerNode::new("config",  config_layer))

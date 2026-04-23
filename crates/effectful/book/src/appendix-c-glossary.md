@@ -10,7 +10,7 @@ The prefix operator inside `effect!` that runs an inner effect and binds its suc
 ---
 
 **Backpressure**
-The mechanism by which a slow consumer signals to a fast producer to slow down or drop data. In id_effect, expressed via `BackpressurePolicy`: `Block`, `DropLatest`, `DropOldest`, or `Unbounded`. See [Backpressure Policies](./part4/ch13-03-backpressure.md).
+The mechanism by which a slow consumer signals to a fast producer to slow down or drop data. In effectful, expressed via `BackpressurePolicy`: `Block`, `DropLatest`, `DropOldest`, or `Unbounded`. See [Backpressure Policies](./part4/ch13-03-backpressure.md).
 
 ---
 

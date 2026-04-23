@@ -1,7 +1,7 @@
 [book]
 title = "Typed Effects in Rust"
-authors = ["id_effect contributors"]
-description = "Learn to build composable, testable async programs with id_effect"
+authors = ["effectful contributors"]
+description = "Learn to build composable, testable async programs with effectful"
 language = "en"
 
 [build]
@@ -10,8 +10,8 @@ build-dir = "book"
 [output.html]
 default-theme = "rust"
 preferred-dark-theme = "coal"
-git-repository-url = "https://github.com/Industrial/id_effect"
-edit-url-template = "https://github.com/Industrial/id_effect/edit/main/crates/id_effect/book/{path}"
+git-repository-url = "https://github.com/EduSantosBrito/effectful"
+edit-url-template = "https://github.com/EduSantosBrito/effectful/edit/main/crates/effectful/book/{path}"
 
 [output.html.playground]
 editable = true

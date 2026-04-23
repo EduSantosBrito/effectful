@@ -1,10 +1,10 @@
-//! GET + [`id_effect_reqwest::text`] against a local [wiremock](https://docs.rs/wiremock) server, driven
+//! GET + [`effectful_reqwest::text`] against a local [wiremock](https://docs.rs/wiremock) server, driven
 //! with [`effectful_tokio::run_async`].
 //!
-//! Run: `cargo run -p id_effect_reqwest --example 010_wiremock_get_text`
+//! Run: `cargo run -p effectful_reqwest --example 010_wiremock_get_text`
 
 use effectful::service_env;
-use id_effect_reqwest::{Client, Error, ReqwestClientKey, text};
+use effectful_reqwest::{Client, Error, ReqwestClientKey, text};
 use effectful_tokio::run_async;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

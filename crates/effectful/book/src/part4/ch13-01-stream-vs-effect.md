@@ -59,7 +59,7 @@ let count: Effect<usize, DbError, Db> = all_users().fold(0, |acc, _| acc + 1);
 Wrap an `Effect` in a single-element stream when you need to compose with streaming operators:
 
 ```rust
-use id_effect::Stream;
+use effectful::Stream;
 
 let single_user_stream: Stream<User, DbError, Db> = Stream::from_effect(get_user(1));
 

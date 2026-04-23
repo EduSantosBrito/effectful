@@ -1,7 +1,8 @@
 //! Ex 024 — `get_mut` mutates a tagged cell in place.
-use effectful::{ctx, service_key};
+use effectful::{Service, ctx};
 
-service_key!(struct ScoreKey);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct ScoreKey;
 
 fn main() {
   let mut env = ctx!(ScoreKey => 10_i32);

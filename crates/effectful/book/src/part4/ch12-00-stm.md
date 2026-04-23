@@ -4,4 +4,4 @@ Shared mutable state is hard. Mutexes work but compose poorly: lock two mutexes 
 
 Software Transactional Memory (STM) takes a different approach: every operation on shared state runs inside a *transaction*. Transactions commit atomically or roll back and retry. No explicit locks. No deadlocks. No torn reads.
 
-This chapter covers id_effect's STM implementation: `Stm`, `TRef`, `commit`, and the transactional collection types.
+This chapter covers effectful's STM implementation: `Stm`, `TRef`, `commit`, and the transactional collection types.

@@ -1,7 +1,8 @@
 //! Ex 021 — `ctx!` builds a `Context` from key/value pairs.
-use effectful::{Cons, Context, Get, Nil, Tagged, ctx, run_blocking, service_key, succeed};
+use effectful::{Cons, Context, Get, Nil, Tagged, Service, ctx, run_blocking, succeed};
 
-service_key!(struct PortKey);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct PortKey;
 
 type Env = Context<Cons<Tagged<PortKey, u16>, Nil>>;
 

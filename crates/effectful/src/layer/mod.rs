@@ -4,7 +4,8 @@
 //!
 //! | Submodule | Provides | Depends on |
 //! |-----------|----------|------------|
-//! | [`factory`] | [`Layer`], [`LayerExt`], [`LayerFn`], [`LayerFnFrom`], [`LayerFrom`], [`Stack`], [`StackThen`], constructors | Stratum 0 (`func::compose`, `func::pipe1`), Stratum 2 (`kernel::Effect`), Stratum 3 (`context::{Cons, Nil}`), Stratum 6 (`runtime::run_blocking`) |
+//! | [`di`] | [`Layer`] | Stratum 2 (`kernel::Effect`), Stratum 3 (`context::ServiceContext`) |
+//! | [`factory`] | [`LayerBuild`], [`LayerExt`], [`LayerFn`], [`LayerFnFrom`], [`LayerFrom`], [`Stack`], [`StackThen`], constructors | Stratum 0 (`func::compose`, `func::pipe1`), Stratum 2 (`kernel::Effect`), Stratum 3 (`context::{Cons, Nil}`), Stratum 6 (`runtime::run_blocking`) |
 //! | [`graph`] | [`LayerGraph`], [`LayerNode`], [`LayerPlan`], [`LayerPlannerError`], [`LayerDiagnostic`] | Stratum 0 (`hash_map`, `mutable_list`), Stratum 6 (`runtime::run_blocking`), Stratum 12 (`stm::TRef`, optional) |
 //!
 //! ## Design
@@ -27,14 +28,18 @@
 //! [`LayerGraph`], [`LayerNode`], [`LayerPlan`], [`LayerPlannerError`], [`LayerDiagnostic`].
 
 pub mod factory;
+pub mod di;
 pub mod graph;
 pub mod service;
+pub mod typed;
 
+pub use di::Layer;
 pub use factory::{
-  Layer, LayerEffect, LayerExt, LayerFn, LayerFnFrom, LayerFrom, Stack, StackThen, effect, fail,
-  from_fn, merge_all, succeed,
+  LayerBuild, LayerEffect, LayerExt, LayerFn, LayerFnFrom, LayerFrom, Stack, StackThen, effect,
+  fail, from_fn, merge_all, succeed,
 };
 pub use graph::{LayerDiagnostic, LayerGraph, LayerNode, LayerPlan, LayerPlannerError};
 pub use service::{
   Service, ServiceEnv, layer_service, layer_service_env, provide_service, service, service_env,
 };
+pub use typed::{LayerError, MemoizedLayer, MergedLayer, TypedLayer, TypedLayerExt};

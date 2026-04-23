@@ -40,7 +40,7 @@ use core::marker::PhantomData;
 use core::pin::Pin;
 use core::task::{Context as TaskContext, Poll};
 
-use crate::context::{Cons, Context, Nil};
+use crate::context::{Cons, Context, MissingService, Nil, Service, ServiceContext, ServiceLookup};
 use crate::failure::exit::Exit;
 use crate::failure::union::Or;
 use crate::runtime::Never;
@@ -665,66 +665,35 @@ where
     }
   }
 
-  // ── Service Access Constructors (Thesis 3) ──────────────────────────────
+  // ── Service Access Constructors ────────────────────────────────────────
 
   /// Create an effect that reads a required service from the environment.
   ///
-  /// The service is looked up by key `K` at the head of the context.
-  /// Use with [`provide_service`](crate::layer::provide_service) which places
-  /// the service at the head.
-  ///
-  /// # Example
-  ///
-  /// ```rust
-  /// use effectful::{service_key, Context, Cons, Nil, Tagged};
-  /// use effectful::kernel::effect::Effect;
-  /// use effectful::runtime::run_blocking;
-  ///
-  /// service_key!(struct DbKey);
-  ///
-  /// let env = Context::new(Cons(Tagged::<DbKey, _>::new(42i32), Nil));
-  /// let program: Effect<i32, (), _> = Effect::service::<DbKey>();
-  /// assert_eq!(run_blocking(program, env), Ok(42));
-  /// ```
+  /// The service type itself is the key, mirroring Effect v4's `Context.Service`.
   #[inline]
-  pub fn service<K>() -> Effect<<R as crate::context::Get<K>>::Target, E, R>
+  pub fn service<S>() -> Effect<S, E, R>
   where
-    E: 'static,
-    R: crate::context::Get<K> + 'static,
-    <R as crate::context::Get<K>>::Target: Clone + 'static,
+    E: From<MissingService> + 'static,
+    R: ServiceLookup<S> + 'static,
+    S: Service,
   {
     Effect::new(|r: &mut R| {
-      Ok(crate::context::Get::<K>::get(r).clone())
+      ServiceLookup::<S>::service(r)
+        .cloned()
+        .ok_or_else(|| MissingService { name: S::NAME }.into())
     })
   }
 
   /// Create an effect that optionally reads a service from the environment.
-  ///
-  /// Returns `None` if the service is not at the head of the context.
-  /// This is useful for services that may or may not be provided.
-  ///
-  /// # Example
-  ///
-  /// ```rust
-  /// use effectful::{service_key, Context, Cons, Nil, Tagged};
-  /// use effectful::kernel::effect::Effect;
-  /// use effectful::runtime::run_blocking;
-  ///
-  /// service_key!(struct LoggerKey);
-  ///
-  /// let env = Context::new(Cons(Tagged::<LoggerKey, _>::new("log"), Nil));
-  /// let program: Effect<Option<&str>, (), _> = Effect::service_option::<LoggerKey>();
-  /// assert_eq!(run_blocking(program, env), Ok(Some("log")));
-  /// ```
   #[inline]
-  pub fn service_option<K>() -> Effect<Option<<R as crate::context::GetOption<K>>::Target>, E, R>
+  pub fn service_option<S>() -> Effect<Option<S>, E, R>
   where
     E: 'static,
-    R: crate::context::GetOption<K> + 'static,
-    <R as crate::context::GetOption<K>>::Target: Clone + 'static,
+    R: ServiceLookup<S> + 'static,
+    S: Service,
   {
     Effect::new(|r: &mut R| {
-      Ok(crate::context::GetOption::<K>::get_option(r).cloned())
+      Ok(ServiceLookup::<S>::service(r).cloned())
     })
   }
 
@@ -1068,7 +1037,7 @@ where
 
   /// Provide the environment, eliminating the `R` parameter.
   #[inline]
-  pub fn provide(self, ctx: R) -> Effect<A, E, ()> {
+  pub fn provide_env(self, ctx: R) -> Effect<A, E, ()> {
     Effect::new_async(move |_r: &mut ()| {
       box_future(async move {
         let mut ctx = ctx;
@@ -1190,6 +1159,36 @@ where
     })
   }
 
+}
+
+impl<A, E> Effect<A, E, ServiceContext>
+where
+  A: 'static,
+  E: 'static,
+{
+  /// Provide this effect with a service [`Layer`](crate::Layer).
+  ///
+  /// This mirrors Effect's `Effect.provide(layer)`: the layer is built lazily at
+  /// the program edge and its services become the environment for this effect.
+  #[inline]
+  pub fn provide<ROut>(self, layer: crate::layer::Layer<ROut, E, ()>) -> Effect<A, E, ()>
+  where
+    ROut: 'static,
+  {
+    Effect::new_async(move |_unit: &mut ()| {
+      box_future(async move {
+        let mut context = layer.build_with(ServiceContext::empty()).await?;
+        self.run(&mut context).await
+      })
+    })
+  }
+
+  /// Run with an empty service context.
+  #[inline]
+  pub async fn run_services(self) -> Result<A, E> {
+    let mut context = ServiceContext::empty();
+    self.run(&mut context).await
+  }
 }
 
 struct MapProgram<A, B, E, R, G>
@@ -1749,7 +1748,7 @@ mod tests {
     #[test]
     fn provide_fixes_environment() {
       let eff: Effect<i32, (), i32> = Effect::new(|env| Ok(*env * 2));
-      let provided = eff.provide(21);
+      let provided = eff.provide_env(21);
       assert_eq!(run(provided, ()), Ok(42));
     }
 

@@ -1,6 +1,6 @@
-//! Deserialize a struct from a TOML file with Figment and [`id_effect_config::extract`].
+//! Deserialize a struct from a TOML file with Figment and [`effectful_config::extract`].
 
-use id_effect_config::{extract, figment};
+use effectful_config::{extract, figment};
 use serde::Deserialize;
 use std::io::Write;
 

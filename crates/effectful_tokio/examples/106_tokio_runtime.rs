@@ -1,9 +1,9 @@
 //! Ex 106 — `TokioRuntime` implements `effectful::Runtime` (sleep / yield on the Tokio driver).
 //!
-//! Run: `cargo run -p id_effect_tokio --example 106_tokio_runtime`
+//! Run: `cargo run -p effectful_tokio --example 106_tokio_runtime`
 
 use effectful::{Runtime, run_async, succeed};
-use id_effect_tokio::{TokioRuntime, yield_now};
+use effectful_tokio::{TokioRuntime, yield_now};
 use std::time::Duration;
 
 fn main() {

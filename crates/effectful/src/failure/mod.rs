@@ -14,8 +14,10 @@
 
 pub mod cause;
 pub mod exit;
+pub mod tagged_error;
 pub mod union;
 
 pub use cause::Cause;
 pub use exit::Exit;
+pub use tagged_error::{TagHandler, TaggedError, catch_tag, catch_tags, or_die};
 pub use union::Or;

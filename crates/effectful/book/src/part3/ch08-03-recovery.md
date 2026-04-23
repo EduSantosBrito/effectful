@@ -1,6 +1,6 @@
 # Recovery Combinators — catch, fold, and Friends
 
-Knowing about `Cause` and `Exit` is only useful if you can act on them. id_effect provides a focused set of recovery combinators.
+Knowing about `Cause` and `Exit` is only useful if you can act on them. effectful provides a focused set of recovery combinators.
 
 ## catch: Handle Expected Errors
 

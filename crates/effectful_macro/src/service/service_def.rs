@@ -14,6 +14,6 @@
 macro_rules! service_def {
   ($(#[$m:meta])* $vis:vis struct $name:ident as $alias:ident => $ty:ty) => {
     $crate::service_key!($(#[$m])* $vis struct $name);
-    $vis type $alias = ::effectful::Service<$name, $ty>;
+    $vis type $alias = ::effectful::layer::service::Service<$name, $ty>;
   };
 }

@@ -1,11 +1,14 @@
-//! Ex 033 — `layer_service` builds a `Layer` for one tag.
-use effectful::{Layer, layer_service, service_key};
+//! Ex 033 — `Layer::succeed` builds a service layer.
+use effectful::{Layer, MissingService, Service, run_blocking};
 
-service_key!(struct IdKey);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
+struct Id {
+  value: u64,
+}
 
 fn main() {
-  let layer = layer_service::<IdKey, _>(99_u64);
-  let cell = layer.build().expect("build");
-  assert_eq!(cell.value, 99);
+  let layer = Layer::<Id, MissingService>::succeed(Id { value: 99 });
+  let context = run_blocking(layer.build(), ()).expect("build");
+  assert_eq!(context.get::<Id>().map(|id| id.value), Some(99));
   println!("033_layer_service ok");
 }

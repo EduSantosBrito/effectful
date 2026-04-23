@@ -4,7 +4,7 @@
 //! code and show comparable timings. Run:
 //!
 //! ```bash
-//! cargo bench -p id_effect --bench effect_macro_bind_free
+//! cargo bench -p effectful --bench effect_macro_bind_free
 //! ```
 
 use ::effectful::{Effect, effect};
