@@ -1,83 +1,72 @@
 # Scopes and Finalizers — Guaranteed Cleanup
 
-A `Scope` is a region of execution with a finalizer registry. Any cleanup effects registered in the scope run when the scope exits — regardless of how it exits.
+`Scope` is a finalizer registry. Finalizers are plain boxed closures that receive an `Exit<(), Never>` and return `Effect<(), Never, ()>`.
 
 ## Creating a Scope
 
-```rust
-use effectful::{Scope, Finalizer, scoped};
+```rust,ignore
+use effectful::{Effect, Exit, Never, Scope, scope_with};
 
-let result = scoped(|scope| {
+let result = scope_with(|scope| {
     effect! {
-        let conn = ~ open_connection();
+        let conn = bind* open_connection();
 
-        // Register cleanup — runs when scope exits
-        ~ scope.add_finalizer(Finalizer::new(move || {
-            conn.close()
+        let conn_for_close = conn.clone();
+        let added = scope.add_finalizer(Box::new(move |_exit: Exit<(), Never>| {
+            conn_for_close.close()
         }));
 
-        // Do work
-        let data = ~ fetch_data(&conn);
+        if !added {
+            return Err(AppError::ScopeClosed);
+        }
+
+        let data = bind* fetch_data(&conn);
         process(data)
     }
 });
 ```
 
-`scoped` creates a scope, runs the inner effect, and then — in all cases — runs the registered finalizers in reverse order.
+`scope_with` creates a fresh scope, runs the returned effect, then closes the scope. Closing runs registered finalizers.
 
-## Finalizers Always Run
+## Finalizers Always Run on Close
 
-```rust
-let result = scoped(|scope| {
-    effect! {
-        let conn = ~ open_connection();
-        ~ scope.add_finalizer(Finalizer::new(move || conn.close()));
+```rust,ignore
+let scope = Scope::make();
+let added = scope.add_finalizer(Box::new(|_exit| cleanup_temp_file()));
+assert!(added);
 
-        ~ risky_operation();  // may panic or fail
-        "done"
-    }
-});
-// Whether risky_operation succeeds, fails, or panics:
-// conn.close() ALWAYS runs before result is returned
+scope.close();
 ```
 
-This is the guarantee that RAII can't provide in async: the finalizer is an async effect that runs in the right context, at the right time, always.
+Finalizers run when `close` / `close_with_exit` is called. `close` is idempotent and returns `true` only for the first close.
 
 ## Multiple Finalizers
 
-Finalizers run in reverse registration order (last-in, first-out — like RAII destructors):
+Finalizers run in reverse registration order.
 
-```rust
-scoped(|scope| {
-    effect! {
-        let conn   = ~ open_connection();
-        let txn    = ~ begin_transaction(&conn);
-        let cursor = ~ open_cursor(&txn);
+```rust,ignore
+scope.add_finalizer(Box::new(|_| close_connection(conn)));
+scope.add_finalizer(Box::new(|_| rollback_transaction(txn)));
+scope.add_finalizer(Box::new(|_| close_cursor(cursor)));
 
-        ~ scope.add_finalizer(Finalizer::new(move || close_cursor(cursor)));   // runs 3rd
-        ~ scope.add_finalizer(Finalizer::new(move || rollback_or_commit(txn))); // runs 2nd... wait
-        ~ scope.add_finalizer(Finalizer::new(move || close_connection(conn)));  // wait — read below
-    }
-})
+scope.close();
+// Runs: close_cursor, rollback_transaction, close_connection
 ```
 
-Actually, the first registered finalizer runs *last*. Register cleanup in the order you want it to run, reversed: register connection first (so it closes last), cursor last (so it closes first).
+Register parent resources first and child resources last.
 
 ## Scope Inheritance
 
-Scopes nest. A child scope's finalizers run before the parent's:
+Scopes can be nested manually.
 
-```rust
-scoped(|outer| {
-    scoped(|inner| {
-        effect! {
-            ~ inner.add_finalizer(Finalizer::new(|| cleanup_inner()));
-            ~ outer.add_finalizer(Finalizer::new(|| cleanup_outer()));
-            work()
-        }
-    })
-})
-// Execution order: cleanup_inner(), then cleanup_outer()
+```rust,ignore
+let outer = Scope::make();
+let inner = outer.fork();
+
+inner.add_finalizer(Box::new(|_| cleanup_inner()));
+outer.add_finalizer(Box::new(|_| cleanup_outer()));
+
+outer.close(); // closes children before outer finalizers
 ```
 
-Layers use scopes internally — every resource a Layer builds can register its own finalizer, and the whole graph tears down cleanly when the application shuts down.
+Use `Scope::fork` for child scopes and `Scope::extend` to reparent an existing open scope.

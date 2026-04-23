@@ -1,111 +1,78 @@
 # run_test — The Test Harness
 
-`run_test` is the test equivalent of `run_blocking`. Use it in every `#[test]` that runs an effect.
+`run_test` runs an effect with an explicit environment and returns `Exit<A, E>`.
 
 ## Basic Usage
 
-```rust
-use effectful::{run_test, succeed};
+```rust,ignore
+use effectful::{Exit, run_test, succeed};
 
 #[test]
 fn simple_effect_succeeds() {
-    let result = run_test(succeed(42));
+    let result = run_test(succeed::<_, (), ()>(42), ());
     assert_eq!(result, Exit::Success(42));
 }
 ```
 
-`run_test` returns an `Exit<A, E>` rather than a `Result<A, E>`. This lets you assert on the exact exit reason — success, typed failure, defect, or cancellation.
-
-## Why Not run_blocking in Tests?
-
-`run_blocking` is correct but missing test-specific guarantees:
-
-| Feature | `run_blocking` | `run_test` |
-|---------|---------------|------------|
-| Runs the effect | ✓ | ✓ |
-| Detects fiber leaks | ✗ | ✓ |
-| Deterministic scheduling | ✗ | ✓ |
-| Reports leaked resources | ✗ | ✓ |
-
-Fiber leaks — effects that spawn children and don't join them — are silent in production but become test failures under `run_test`. This catches a class of resource leak bugs at unit-test time.
+There is no one-argument shorthand. Pass `()` for effects with no environment.
 
 ## Asserting on Exit
 
-```rust
+```rust,ignore
 #[test]
 fn division_by_zero_fails() {
-    let eff = divide(10, 0);
-    let exit = run_test(eff);
-
-    // Assert specific failure
+    let exit = run_test(divide(10, 0), ());
     assert!(matches!(exit, Exit::Failure(Cause::Fail(DivError::DivisionByZero))));
-}
-
-#[test]
-fn effect_that_panics_is_a_defect() {
-    let eff = effect!(|_r: &mut ()| {
-        panic!("oops");
-    });
-    let exit = run_test(eff);
-
-    assert!(matches!(exit, Exit::Failure(Cause::Die(_))));
 }
 ```
 
-`Exit::Success(a)` — the effect succeeded with value `a`
-`Exit::Failure(Cause::Fail(e))` — the effect failed with typed error `e`
-`Exit::Failure(Cause::Die(s))` — the effect panicked or encountered a defect
-`Exit::Failure(Cause::Interrupt)` — the effect was cancelled
+Common shapes:
 
-## run_test with an Environment
+| Exit | Meaning |
+|------|---------|
+| `Exit::Success(a)` | Effect succeeded |
+| `Exit::Failure(Cause::Fail(e))` | Typed failure |
+| `Exit::Failure(Cause::Die(message))` | Defect message |
+| `Exit::Failure(Cause::Interrupt(id))` | Fiber interrupt |
 
-When your effect needs services, provide a test environment:
+## Running with an Environment
 
-```rust
+```rust,ignore
 #[test]
 fn create_user_inserts_into_db() {
     let fake_db = FakeDatabase::new();
-    let env = ctx!(DbKey => Arc::new(fake_db.clone()));
+    let env = fake_db.to_context();
 
     let eff = create_user(NewUser { name: "Alice".into(), age: 30 });
-    let exit = run_test_with_env(eff, env);
+    let exit = run_test(eff, env);
 
     assert!(matches!(exit, Exit::Success(_)));
-    assert_eq!(fake_db.users().len(), 1);
 }
 ```
 
-`run_test_with_env(effect, env)` is the full version. `run_test(effect)` is shorthand for `run_test_with_env(effect, ())` when the effect requires no environment.
+`run_test(effect, env)` is the full API. It resets the test leak counters, runs the effect with `run_blocking`, then checks the leak counters.
 
-## run_test_and_unwrap
+## run_test_with_clock
 
-When you're confident an effect succeeds and just want the value:
+```rust,ignore
+use std::time::Instant;
+use effectful::{TestClock, run_test_with_clock};
 
-```rust
-#[test]
-fn addition_works() {
-    let result: i32 = run_test_and_unwrap(succeed(1 + 1));
-    assert_eq!(result, 2);
-}
+let clock = TestClock::new(Instant::now());
+let exit = run_test_with_clock(effect, env, clock);
 ```
 
-`run_test_and_unwrap` panics on any non-success `Exit`, with a descriptive message. Use it for happy-path tests where a failure is a bug in the test setup.
+`run_test_with_clock` currently delegates to `run_test` after accepting the explicit clock argument. Use explicit-clock scheduling helpers (`retry_with_clock`, `repeat_with_clock`) when the effect itself must use that clock.
 
-## Fiber Leak Detection
+## Leak Assertions
 
-```rust
-#[test]
-fn this_test_will_fail_due_to_leak() {
-    let eff = effect!(|_r: &mut ()| {
-        // Spawns a fiber but never joins it
-        run_fork(/* … */);
-        ()
-    });
+The testing module exposes assertion effects and test hooks:
 
-    // run_test detects the leaked fiber and fails the test
-    let exit = run_test(eff);
-    // exit: Exit::Failure(Cause::Die("fiber leak detected: 1 fiber(s) not joined"))
-}
+```rust,ignore
+use effectful::{assert_no_leaked_fibers, assert_no_unclosed_scopes};
+
+run_blocking(assert_no_leaked_fibers(), ())?;
+run_blocking(assert_no_unclosed_scopes(), ())?;
 ```
 
-Fix leaks by joining fibers or explicitly cancelling them before the effect completes.
+`run_test` calls both assertions after the effect run. If a hook recorded a leak, the assertion panics.

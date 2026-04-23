@@ -1,104 +1,71 @@
 # Pools — Reusing Expensive Resources
 
-Creating a database connection takes time: DNS lookup, TCP handshake, TLS, authentication. Creating one per request is wasteful. A pool maintains a set of connections and lends them out, returning them when done.
+`Pool<A, E>` and `KeyedPool<K, A, E>` manage reusable values with a capacity gate. A checkout is tied to a `Scope`: when the scope closes, the value is returned to the idle list unless invalidated.
 
-effectful provides `Pool` and `KeyedPool` as first-class effect constructs.
+## Pool
 
-## Pool: Basic Connection Pool
-
-```rust
+```rust,ignore
 use effectful::Pool;
 
-// Create a pool of up to 10 connections
-let pool: Pool<Connection> = Pool::new(
-    || open_connection("postgres://localhost/app"),  // factory
-    10,                                               // max size
-);
+let pool_effect = Pool::make(10, || open_connection("postgres://localhost/app"));
+let pool: Pool<Connection, DbError> = run_blocking(pool_effect, ())?;
 ```
 
-The pool lazily creates connections up to the max. Idle connections are kept alive for reuse.
+`Pool::make(capacity, factory)` returns `Effect<Pool<A, E>, Never, ()>`. The factory is an effect that creates a fresh value when no reusable idle value is available.
 
-## Using a Pool Connection
+## Checking Out
 
-```rust
-pool.with_resource(|conn: &Connection| {
-    effect! {
-        let rows = ~ conn.query("SELECT * FROM users");
-        rows.into_iter().map(User::from_row).collect::<Vec<_>>()
-    }
-})
+```rust,ignore
+use effectful::{Scope, run_blocking};
+
+let scope = Scope::make();
+let conn = run_blocking(pool.get(), scope.clone())?;
+
+// Use conn while scope is open.
+
+scope.close(); // returns conn to the pool's idle list
 ```
 
-`with_resource` acquires a connection from the pool, runs the effect, and returns the connection automatically when done — regardless of success, failure, or cancellation. No `acquire_release` boilerplate; the pool handles it.
+`pool.get()` returns `Effect<A, E, Scope>`. It acquires capacity, reuses an idle value or runs the factory, and registers a finalizer in the provided scope.
 
-## Waiting for Availability
+## Invalidating Values
 
-If all connections are in use, `with_resource` waits until one becomes available:
-
-```rust
-// Concurrent requests share the pool; each waits its turn
-fiber_all(vec![
-    pool.with_resource(|c| query_a(c)),
-    pool.with_resource(|c| query_b(c)),
-    pool.with_resource(|c| query_c(c)),
-])
+```rust,ignore
+run_blocking(pool.invalidate(conn.clone()), ())?;
 ```
 
-The pool queues waiters and notifies them as connections are returned.
+Invalidated values are not reused when their checkout scope closes.
 
-## KeyedPool: Multiple Named Pools
+## KeyedPool
 
-For scenarios with multiple distinct pools (e.g., read replica + write primary):
+Use `KeyedPool` when resource creation depends on a key.
 
-```rust
+```rust,ignore
 use effectful::KeyedPool;
 
-let pools: KeyedPool<&str, Connection> = KeyedPool::new(
-    |key: &&str| open_connection(key),
-    5,  // max per key
-);
+let pools_effect = KeyedPool::make(20, |key: DbRole| open_connection_for(key));
+let pools: KeyedPool<DbRole, Connection, DbError> = run_blocking(pools_effect, ())?;
 
-// Get a connection for the write primary
-pools.with_resource("write-primary", |conn| { ... })
+let scope = Scope::make();
+let primary = run_blocking(pools.get(DbRole::Primary), scope.clone())?;
+let replica = run_blocking(pools.get(DbRole::Replica), scope.clone())?;
 
-// Get a connection for the read replica
-pools.with_resource("read-replica", |conn| { ... })
+scope.close();
 ```
 
-Each key has its own independently bounded pool.
+Capacity is global across all keys. Idle values are stored per key.
+
+## TTL
+
+Both pool types have `make_with_ttl`. Idle values older than the TTL are discarded on checkout.
+
+```rust,ignore
+let pool = run_blocking(
+    Pool::make_with_ttl(10, Duration::from_secs(300), || open_connection(url.clone())),
+    (),
+)?;
+```
 
 ## Pool as a Service
 
-In practice, pools live in the effect environment as services:
-
-```rust
-service_key!(DbPoolKey: Pool<Connection>);
-
-fn query_users() -> Effect<Vec<User>, DbError, impl NeedsDbPool> {
-    effect! {
-        let pool = ~ DbPoolKey;
-        ~ pool.with_resource(|conn| {
-            effect! {
-                let rows = ~ conn.query("SELECT * FROM users");
-                rows.iter().map(User::from_row).collect::<Vec<_>>()
-            }
-        })
-    }
-}
-```
-
-The pool is provided via a Layer:
-
-```rust
-let pool_layer = LayerFn::new(|config: &Tagged<ConfigKey>| {
-    effect! {
-        let pool = Pool::new(
-            || Connection::open(config.value().db_url()),
-            config.value().pool_size(),
-        );
-        tagged::<DbPoolKey>(pool)
-    }
-});
-```
-
-Pool creation, lifecycle, and cleanup are all handled by the Layer. Business code sees only `NeedsDbPool`.
+In applications, build the pool at startup and provide it as a service or context value. Business code should depend on the pool abstraction and checkout inside an explicit `Scope`.

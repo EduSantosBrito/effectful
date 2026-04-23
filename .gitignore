@@ -60,6 +60,7 @@
 /target/
 /tmp/
 crates/id_effect/book/book/
+crates/effectful/book/book/
 Cargo.lock
 Thumbs.db
 \!logs/.gitkeep

@@ -6,13 +6,13 @@ If you've used tuples as `R` for a while, you've probably already hit the wall. 
 
 Two dependencies: perfectly readable.
 
-```rust
+```rust,ignore
 Effect<A, E, (Database, Logger)>
 ```
 
 Five dependencies: which is which?
 
-```rust
+```rust,ignore
 Effect<A, E, (Pool, Pool, Logger, Config, HttpClient)>
 //            ^^^^ two Pools — which is the main DB and which is the cache?
 ```
@@ -23,14 +23,14 @@ Tuples are positional. `(Pool, Pool, ...)` is ambiguous — both fields have the
 
 Positional types are fragile under change. Say your function started with:
 
-```rust
+```rust,ignore
 fn foo() -> Effect<A, E, (Database, Logger)>
 //                        0         1
 ```
 
 Now a teammate adds `Config` between them:
 
-```rust
+```rust,ignore
 fn foo() -> Effect<A, E, (Database, Config, Logger)>
 //                        0         1       2
 ```
@@ -41,10 +41,10 @@ Every caller that was providing a tuple `(db, log)` must be updated to `(db, con
 
 The deeper problem: Rust can't distinguish `Pool` for the main database from `Pool` for the cache. They're the same type. Positional tuples just accept both:
 
-```rust
-// V1: provide (main_pool, cache_pool)
+```rust,ignore
+// V1: run with (main_pool, cache_pool)
 // V2: accidentally swap them
-effect.provide((cache_pool, main_pool))  // compiles, wrong at runtime
+run_blocking(effect, (cache_pool, main_pool))  // compiles, wrong at runtime
 ```
 
 No compile error. Wrong behaviour. Possibly wrong for months before you notice.

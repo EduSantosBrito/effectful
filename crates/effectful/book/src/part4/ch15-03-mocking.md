@@ -1,42 +1,50 @@
 # Mocking Services — Test Doubles via Layers
 
-In effectful, "mocking" isn't a special testing concept — it's just providing a different `Layer`. Production code gets a `PostgresDb` layer. Test code gets an `InMemoryDb` layer. Business logic never knows the difference.
-
-No mock frameworks. No `#[automock]`. No `vi.mock()` equivalent. Just layers.
+In effectful, a test double is just a different service value or layer. Production code gets a real service; tests get an in-memory or spy service with the same service type.
 
 ## The Pattern
 
-Define a service trait (or use a service key with a trait object):
+Wrap your interface in a cloneable service struct.
 
-```rust
-service_key!(DbKey: Arc<dyn Db>);
-
-trait Db: Send + Sync {
+```rust,ignore
+trait DbImpl: Send + Sync {
     fn get_user(&self, id: UserId) -> Effect<User, DbError, ()>;
     fn save_user(&self, user: User) -> Effect<(), DbError, ()>;
 }
+
+#[derive(Clone, Service)]
+struct Db {
+    inner: Arc<dyn DbImpl>,
+}
+
+impl Db {
+    fn get_user(&self, id: UserId) -> Effect<User, DbError, ()> {
+        self.inner.get_user(id)
+    }
+
+    fn save_user(&self, user: User) -> Effect<(), DbError, ()> {
+        self.inner.save_user(user)
+    }
+}
 ```
 
-Provide two implementations — one for production, one for tests:
+## Test Double
 
-```rust
-// Production
-struct PostgresDb { pool: PgPool }
-impl Db for PostgresDb { /* real SQL queries */ }
+```rust,ignore
+struct InMemoryDb {
+    users: Mutex<HashMap<UserId, User>>,
+}
 
-// Test double
-struct InMemoryDb { users: Mutex<HashMap<UserId, User>> }
-impl Db for InMemoryDb {
+impl DbImpl for InMemoryDb {
     fn get_user(&self, id: UserId) -> Effect<User, DbError, ()> {
-        let users = self.users.lock().unwrap();
-        match users.get(&id) {
-            Some(u) => succeed(u.clone()),
-            None    => fail(DbError::NotFound(id)),
+        match self.users.lock().expect("users lock").get(&id).cloned() {
+            Some(user) => succeed(user),
+            None => fail(DbError::NotFound(id)),
         }
     }
 
     fn save_user(&self, user: User) -> Effect<(), DbError, ()> {
-        self.users.lock().unwrap().insert(user.id, user);
+        self.users.lock().expect("users lock").insert(user.id, user);
         succeed(())
     }
 }
@@ -44,66 +52,68 @@ impl Db for InMemoryDb {
 
 ## Injecting the Test Double
 
-```rust
+```rust,ignore
 #[test]
 fn get_user_returns_saved_user() {
-    let db = Arc::new(InMemoryDb::new());
-    let env = ctx!(DbKey => db.clone() as Arc<dyn Db>);
+    let db = Db { inner: Arc::new(InMemoryDb::new()) };
+    let env = db.to_context();
 
-    let eff = effect!(|r: &mut Deps| {
-        let db = ~ DbKey;
-        ~ db.save_user(User { id: UserId::new(1), name: "Alice".into() });
-        ~ db.get_user(UserId::new(1))
+    let effect = Db::use_(|db| {
+        effect! {
+            bind* db.save_user(User { id: UserId::new(1), name: "Alice".into() });
+            bind* db.get_user(UserId::new(1))
+        }
     });
 
-    let exit = run_test_with_env(eff, env);
-    let user = exit.unwrap_success();
-    assert_eq!(user.name, "Alice");
+    let exit = run_test(effect, env);
+    assert!(matches!(exit, Exit::Success(user) if user.name == "Alice"));
 }
 ```
 
-The business logic (`save_user` then `get_user`) is identical to production. Only the environment differs.
+Business logic is unchanged. Only the service value changes.
 
-## Asserting on Calls
+## Spies
 
-When you need to verify that a service was called with specific arguments, add tracking to the test double:
+When you need to assert calls, add tracking to the test double.
 
-```rust
-struct SpyMailer {
-    sent: Mutex<Vec<Email>>,
+```rust,ignore
+#[derive(Clone, Service)]
+struct Mailer {
+    sent: Arc<Mutex<Vec<Email>>>,
 }
 
-impl Mailer for SpyMailer {
+impl Mailer {
     fn send(&self, email: Email) -> Effect<(), MailError, ()> {
-        self.sent.lock().unwrap().push(email.clone());
+        self.sent.lock().expect("sent lock").push(email);
         succeed(())
     }
 }
 
 #[test]
 fn registration_sends_welcome_email() {
-    let spy = Arc::new(SpyMailer::new());
-    let env = ctx!(MailerKey => spy.clone() as Arc<dyn Mailer>);
+    let mailer = Mailer { sent: Arc::new(Mutex::new(Vec::new())) };
+    let env = mailer.clone().to_context();
 
-    let exit = run_test_with_env(register_user("alice@example.com"), env);
+    let exit = run_test(register_user("alice@example.com"), env);
     assert!(matches!(exit, Exit::Success(_)));
 
-    let sent = spy.sent.lock().unwrap();
+    let sent = mailer.sent.lock().expect("sent lock");
     assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].to, "alice@example.com");
 }
 ```
 
 ## Failing Services
 
-Test that your code handles service failures correctly by providing a failing test double:
+Test failure handling by providing a service whose methods fail.
 
-```rust
+```rust,ignore
 struct FailingDb;
-impl Db for FailingDb {
+
+impl DbImpl for FailingDb {
     fn get_user(&self, _id: UserId) -> Effect<User, DbError, ()> {
         fail(DbError::ConnectionLost)
     }
+
     fn save_user(&self, _user: User) -> Effect<(), DbError, ()> {
         fail(DbError::ConnectionLost)
     }
@@ -111,38 +121,32 @@ impl Db for FailingDb {
 
 #[test]
 fn get_user_propagates_db_errors() {
-    let env = ctx!(DbKey => Arc::new(FailingDb) as Arc<dyn Db>);
-    let exit = run_test_with_env(get_user(UserId::new(1)), env);
+    let env = Db { inner: Arc::new(FailingDb) }.to_context();
+    let exit = run_test(get_user(UserId::new(1)), env);
     assert!(matches!(exit, Exit::Failure(Cause::Fail(DbError::ConnectionLost))));
 }
 ```
 
-## Layer-Based Test Setup
+## Layer-Based Setup
 
-For more complex scenarios, build a test layer:
+For larger tests, package doubles in layers.
 
-```rust
-fn test_layer() -> Layer<Deps, (), ()> {
-    Layer::provide(DbKey, Arc::new(InMemoryDb::new()) as Arc<dyn Db>)
-        .stack(Layer::provide(MailerKey, Arc::new(SpyMailer::new()) as Arc<dyn Mailer>))
-        .stack(Layer::provide(ClockKey, Arc::new(TestClock::new()) as Arc<dyn Clock>))
+```rust,ignore
+fn test_layer() -> Layer<(Db, Mailer), AppError, ()> {
+    Layer::succeed(Db { inner: Arc::new(InMemoryDb::new()) })
+        .merge(Layer::succeed(Mailer::spy()))
 }
 
 #[test]
-fn full_registration_flow() {
-    let env = test_layer().build().unwrap();
-    let exit = run_test_with_env(full_registration_flow(), env);
+fn full_registration_flow_works() {
+    let exit = run_test(full_registration_flow().provide(test_layer()), ());
     assert!(matches!(exit, Exit::Success(_)));
 }
 ```
 
-The test layer mirrors your production layer in structure but with test implementations. Add new services in one place and all tests pick them up.
-
 ## What You Don't Need
 
-- No `mockall`, no `mock!` macros
-- No `#[cfg(test)]` on business logic
-- No `Box<dyn Fn(…)>` callback injection patterns
-- No global state reset between tests
-
-The `Layer` system is the mock framework.
+- No mock framework.
+- No `#[cfg(test)]` in business logic.
+- No global service registry reset between tests.
+- No special mocking API beyond ordinary services and layers.

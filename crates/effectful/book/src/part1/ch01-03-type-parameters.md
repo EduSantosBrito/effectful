@@ -12,7 +12,7 @@ Let's examine each one.
 
 The `A` parameter is the success type — what you get back when everything goes right.
 
-```rust
+```rust,ignore
 use effectful::{Effect, succeed};
 
 // This effect produces an i32 on success
@@ -26,7 +26,7 @@ If you're familiar with `Result<T, E>`, think of `A` as the `T`. It's what you'r
 
 When you transform an effect with `.map()`, you're changing the `A`:
 
-```rust
+```rust,ignore
 let numbers: Effect<i32, String, ()> = succeed(21);
 let doubled: Effect<i32, String, ()> = numbers.map(|n| n * 2);
 let stringified: Effect<String, String, ()> = doubled.map(|n| n.to_string());
@@ -38,7 +38,7 @@ Each `.map()` transforms the success value while preserving the error type and r
 
 The `E` parameter is the failure type — what you get back when something goes wrong.
 
-```rust
+```rust,ignore
 use effectful::{Effect, fail};
 
 // This effect always fails with a String error
@@ -52,7 +52,7 @@ Again, if you know `Result<T, E>`, think of `E` as the `E`. It's what you're wor
 
 You can transform error types with `.map_error()`:
 
-```rust
+```rust,ignore
 let db_effect: Effect<User, DbError, ()> = fetch_user(42);
 
 // Convert DbError to a more general AppError
@@ -65,7 +65,7 @@ Unlike traditional error handling where you sprinkle `.map_err()` everywhere, wi
 
 Here's where effects get interesting. The `R` parameter represents the **environment** — the dependencies this effect needs in order to run.
 
-```rust
+```rust,ignore
 // This effect needs nothing to run — R is ()
 let standalone: Effect<i32, String, ()> = succeed(42);
 
@@ -82,20 +82,17 @@ fn get_user_logged(id: u64) -> Effect<User, DbError, (Database, Logger)> {
 
 The key insight: **you cannot run an effect unless you provide its requirements.**
 
-```rust
+```rust,ignore
 let needs_db: Effect<User, DbError, Database> = get_user(42);
 
 // This won't compile! We haven't satisfied the Database requirement.
 // run_blocking(needs_db);  // ERROR: Database not provided
 
-// We need to provide what it needs first
-let satisfied: Effect<User, DbError, ()> = needs_db.provide(my_database);
-
-// Now we can run it
-let user = run_blocking(satisfied)?;
+// We pass the required environment to the runner
+let user = run_blocking(needs_db, my_database)?;
 ```
 
-The `.provide()` method takes a requirement and satisfies it, changing the `R` type. When `R` becomes `()`, the effect needs nothing more and can be executed.
+You can also capture an environment with `.provide_env(my_database)` to get an `Effect<User, DbError, ()>`.
 
 ## Why R Matters
 
@@ -103,7 +100,7 @@ The `R` parameter is why effectful can offer compile-time dependency injection.
 
 Consider this function signature:
 
-```rust
+```rust,ignore
 fn process_order(order: Order) -> Effect<Receipt, OrderError, (Database, PaymentGateway, EmailService, Logger)>
 ```
 
@@ -118,37 +115,40 @@ And the compiler enforces it. If you try to run this effect without providing al
 
 ## R Flows Through Composition
 
-When you combine effects, their requirements combine too:
+When you combine effects, the bound effects must agree on one environment type. Use a shared environment type when multiple services are needed:
 
-```rust
+```rust,ignore
 fn get_user(id: u64) -> Effect<User, DbError, Database> { ... }
 fn send_email(to: &str, body: &str) -> Effect<(), EmailError, EmailService> { ... }
 
-fn notify_user(id: u64) -> Effect<(), AppError, (Database, EmailService)> {
+fn notify_user(id: u64) -> Effect<(), AppError, AppEnv> {
     effect! {
-        let user = ~ get_user(id).map_error(AppError::Db);
-        ~ send_email(&user.email, "Hello!").map_error(AppError::Email);
-        Ok(())
+        let user = bind* get_user(id)
+            .zoom_env(|env: &mut AppEnv| env.database.clone())
+            .map_error(AppError::Db);
+        bind* send_email(&user.email, "Hello!")
+            .zoom_env(|env: &mut AppEnv| env.email.clone())
+            .map_error(AppError::Email);
     }
 }
 ```
 
-The `notify_user` function needs both `Database` (from `get_user`) and `EmailService` (from `send_email`). The compiler infers this automatically — you don't have to manually track which dependencies flow where.
+The `notify_user` function now documents that callers must supply `AppEnv`, and each inner effect explicitly projects the part it needs.
 
 ## The Unit Environment: ()
 
 When `R = ()`, the effect is self-contained. It doesn't need anything from the outside world to run:
 
-```rust
+```rust,ignore
 let standalone: Effect<i32, String, ()> = succeed(42);
 
 // Can run immediately — no dependencies
-let result = run_blocking(standalone);
+let result = run_blocking(standalone, ());
 ```
 
 Most effects start with requirements and gradually have them satisfied as you move toward the "edge" of your program:
 
-```rust
+```rust,ignore
 // Deep in your code: many requirements
 fn business_logic() -> Effect<Result, Error, (Db, Cache, Logger, Config)>
 
@@ -159,14 +159,9 @@ fn main() {
     let logger = setup_logger();
     let config = load_config();
 
-    let effect = business_logic()
-        .provide(db)
-        .provide(cache)
-        .provide(logger)
-        .provide(config);
-    // Now R = ()
+    let env = AppEnv { db, cache, logger, config };
 
-    run_blocking(effect);
+    run_blocking(business_logic(), env);
 }
 ```
 
@@ -174,7 +169,7 @@ fn main() {
 
 Let's practice reading some signatures:
 
-```rust
+```rust,ignore
 // Produces String, never fails, needs nothing
 Effect<String, Never, ()>
 

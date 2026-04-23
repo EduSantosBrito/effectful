@@ -1,138 +1,157 @@
 # API Quick Reference
 
-A condensed reference for the most commonly used types and functions in effectful. For full documentation, use `cargo doc --open -p effectful`.
+A condensed reference for commonly used items in `effectful` 0.2.0. For complete signatures, run `cargo doc --open -p effectful`.
 
 ## Core Types
 
 | Type | Description |
 |------|-------------|
-| `Effect<A, E, R>` | A computation that produces `A`, can fail with `E`, and requires environment `R` |
-| `Stream<A, E, R>` | A sequence of `A` values that can fail with `E` and requires environment `R` |
-| `Stm<A>` | A transactional computation that produces `A` |
-| `Exit<A, E>` | The result of running an effect: `Success(A)` or `Failure(Cause<E>)` |
-| `Cause<E>` | `Fail(E)`, `Die(Box<dyn Any>)`, or `Interrupt` |
-| `Context<R>` | A heterogeneous map of services, the `R` at runtime |
-| `Layer<Out, In, E>` | A recipe for building `Out` from `In`, can fail with `E` |
-| `Chunk<A>` | A contiguous, reference-counted batch of `A` values |
-| `Unknown` | Unvalidated wire data; input type for schemas |
-| `ParseErrors` | Accumulated parse failures with paths |
+| `Effect<A, E, R>` | Lazy computation that succeeds with `A`, fails with `E`, and requires environment `R` |
+| `Exit<A, E>` | Terminal outcome: `Success(A)` or `Failure(Cause<E>)` |
+| `Cause<E>` | Failure algebra: `Fail(E)`, `Die(String)`, `Interrupt(FiberId)`, `Both`, `Then` |
+| `Context<Cons<..., Nil>>` | Typed heterogeneous environment for tagged services |
+| `ServiceContext` | Runtime service table used by the derive-based service/layer API |
+| `Layer<ROut, E, RIn>` | Lazy service layer for `ServiceContext` |
+| `Stm<A, E>` | Transactional computation |
+| `Stream<A, E, R>` | Pull stream of `A` chunks |
+| `Sink<Out, In, E, R>` | Consumer of stream elements |
+| `Schema<A, I, E>` | Bidirectional decoder/encoder with `Unknown` support |
 
-## Constructors
+## Effect Constructors
 
-| Function | Type | Notes |
-|----------|------|-------|
-| `succeed(a)` | `Effect<A, E, R>` | Always succeeds with `a` |
-| `fail(e)` | `Effect<A, E, R>` | Always fails with typed error `e` |
-| `pure(a)` | `Effect<A, Never, ()>` | Alias for `succeed`; `E = Never` |
-| `from_async(f)` | `Effect<A, E, R>` | Lift an async closure |
-| `effect!(…)` | `Effect<A, E, R>` | Do-notation macro |
-| `commit(stm)` | `Effect<A, Never, ()>` | Run an STM transaction |
-| `Stream::from_iter(i)` | `Stream<A, Never, ()>` | Stream from an iterator |
-| `Stream::from_effect(e)` | `Stream<A, E, R>` | Single-element stream |
-| `Stream::unfold_effect(s, f)` | `Stream<A, E, R>` | Generate stream from state |
+| Function | Notes |
+|----------|-------|
+| `succeed(a)` | Always succeeds with `a` |
+| `fail(e)` | Always fails with `e` |
+| `pure(a)` | Infallible `Effect<A, (), ()>` convenience |
+| `from_async(f)` | Lift an async closure returning `Result<A, E>` |
+| `Effect::new(f)` | Lift a synchronous closure over `&mut R` |
+| `Effect::new_async(f)` | Lift an async closure that may borrow `&mut R` |
+| `effect! { ... }` | Do-notation; use `bind* effect` to bind |
 
 ## Effect Combinators
 
 | Method | Notes |
 |--------|-------|
 | `.map(f)` | Transform success value |
-| `.flat_map(f)` | Chain effects |
-| `.map_err(f)` | Transform error |
-| `.catch(f)` | Handle typed failure |
-| `.catch_all(f)` | Handle any `Cause` |
-| `.fold(on_e, on_a)` | Both paths to success |
-| `.or_else(f)` | Try alternative on failure |
-| `.ignore_error()` | Convert failure to `Option` |
-| `.zip(other)` | Run two effects, tuple result |
-| `.zip_left(other)` | Run two effects, keep left |
-| `.zip_right(other)` | Run two effects, keep right |
-| `.retry(schedule)` | Retry on failure |
-| `.repeat(schedule)` | Repeat on success |
-| `.timeout(dur)` | Fail with `Timeout` if too slow |
-
-## Concurrency
-
-| Function/Method | Notes |
-|----------------|-------|
-| `run_fork(rt, f)` | Spawn a fiber |
-| `handle.join()` | `Effect` that waits for the fiber |
-| `handle.interrupt()` | Cancel a fiber |
-| `FiberRef::new(initial)` | Fiber-scoped dynamic variable |
-| `fiber_ref.get()` | Read current fiber's value |
-| `fiber_ref.set(v)` | Set current fiber's value |
-| `with_fiber_id(id, f)` | Run `f` with a specific fiber id |
-
-## STM
-
-| Function | Notes |
-|----------|-------|
-| `TRef::new(v)` | Create a transactional cell |
-| `tref.read_stm()` | Read inside `stm!` |
-| `tref.write_stm(v)` | Write inside `stm!` |
-| `tref.modify_stm(f)` | Modify inside `stm!` |
-| `commit(stm)` | Lift `Stm<A>` into `Effect<A, Never, ()>` |
-| `atomically(stm)` | Execute `Stm` synchronously |
-| `stm::retry()` | Block until any read `TRef` changes |
-| `stm::fail(e)` | Abort transaction with error |
-| `TQueue::bounded(n)` | Transactional FIFO queue |
-| `TMap::new()` | Transactional hash map |
-| `TSemaphore::new(n)` | Transactional semaphore |
-
-## Resources
-
-| Function | Notes |
-|----------|-------|
-| `scope.acquire(res, f)` | Use a resource, run finalizer on exit |
-| `acquire_release(acq, rel)` | Bracket-style resource management |
-| `Pool::new(size, factory)` | Reusable resource pool |
-| `pool.get()` | `Effect` that borrows one resource |
-| `Cache::new(loader)` | Cache backed by an effect |
-
-## Scheduling
-
-| Function | Notes |
-|----------|-------|
-| `Schedule::fixed(d)` | Repeat every `d` |
-| `Schedule::exponential(base)` | Exponential backoff |
-| `Schedule::linear(step)` | Linear backoff |
-| `Schedule::immediate()` | No delay |
-| `.take(n)` | At most `n` repetitions |
-| `.until(pred)` | Stop when predicate holds |
-| `eff.retry(sched)` | Retry with a schedule |
-| `eff.repeat(sched)` | Repeat with a schedule |
+| `.flat_map(f)` | Sequentially compose effects |
+| `.and_then(other)` | Sequence and keep right result |
+| `.and_then_discard(other)` | Sequence and keep left result |
+| `.map_error(f)` | Transform typed error |
+| `.catch(f)` | Recover by returning another effect |
+| `.catch_all(f)` | Recover with a fallback value and `Never` error |
+| `.tap_error(f)` | Run an effect on failure and re-emit the error |
+| `.provide_env(env)` | Capture a full environment and return `Effect<_, _, ()>` |
+| `.zoom_env(f)` | Run an effect requiring `R` inside a larger environment `S` |
+| `.local(f)` | Run with a cloned and modified local environment |
+| `.ensuring(finalizer)` | Run finalizer after success or failure |
+| `.on_exit(f)` | Observe `Exit` without changing result |
 
 ## Running Effects
 
 | Function | Notes |
 |----------|-------|
-| `run_blocking(eff, env)` | Synchronous runner (main/binaries) |
-| `run_async(eff, env)` | Async runner (tokio integration) |
-| `run_test(eff)` | Test harness; detects leaks |
-| `run_test_and_unwrap(eff)` | Test harness; panics on failure |
-| `run_test_with_env(eff, env)` | Test with custom environment |
-| `run_test_with_clock(f)` | Test with controlled `TestClock` |
+| `run_blocking(effect, env)` | Blocking synchronous runner |
+| `run_async(effect, env).await` | Async runner |
+| `run_test(effect, env)` | Test runner returning `Exit<A, E>` |
+| `run_test_with_clock(effect, env, clock)` | Test runner with explicit `TestClock` argument |
+
+## Services and Layers
+
+| Item | Notes |
+|------|-------|
+| `#[derive(Service)]` | Make a cloneable struct available through `Effect::service::<S>()` |
+| `Effect::service::<S>()` | Read service `S` from `R: ServiceLookup<S>` |
+| `ServiceContext::empty().add(service)` | Build a derive-service environment |
+| `Layer::succeed(service)` | Infallible service layer |
+| `Layer::effect(name, make)` | Effectful service layer |
+| `layer.merge(other)` | Build independent services into one context |
+| `layer.provide(provider)` | Use provider services to build the layer, then hide provider output |
+| `layer.provide_merge(provider)` | Provide dependencies and keep both outputs |
+| `layer.memoized()` | Cache the first layer build result |
+
+## Tagged Context Helpers
+
+| Item | Notes |
+|------|-------|
+| `service_key!(pub struct Key);` | Declare a nominal key type |
+| `Tagged<Key, V>` / `Service<Key, V>` | Keyed service cell |
+| `service_env::<Key, _>(value)` | Build a one-cell `Context` |
+| `ctx.get::<Key>()` | Read a tagged value from a typed context |
+| `effect.provide_head(value)` | Provide the head tagged dependency |
+
+## Concurrency
+
+| Function/Method | Notes |
+|-----------------|-------|
+| `run_fork(&runtime, || (effect, env))` | Spawn a fiber |
+| `handle.join()` | Await result as `Result<A, Cause<E>>` |
+| `handle.await_exit()` | Await result as `Exit<A, E>` |
+| `handle.interrupt()` | Interrupt the fiber |
+| `handle.status()` | Inspect `Running`, `Succeeded`, `Failed`, or `Interrupted` |
+| `fiber_all(handles)` | Join many `FiberHandle`s into `Effect<Vec<A>, Cause<E>, ()>` |
+| `with_fiber_id(id, f)` | Run `f` under a fiber id |
+
+## STM
+
+| Function | Notes |
+|----------|-------|
+| `TRef::make(v)` | Transactionally allocate a cell: `Stm<TRef<T>, ()>` |
+| `tref.read_stm()` | Read inside `Stm` |
+| `tref.write_stm(v)` | Write inside `Stm` |
+| `tref.update_stm(f)` | Update value, returning `()` |
+| `tref.modify_stm(f)` | Compute `(output, next)` and write `next` |
+| `Stm::succeed(a)` / `Stm::fail(e)` | Transactional success/failure |
+| `Stm::retry()` | Retry the current transaction |
+| `commit(stm)` / `atomically(stm)` | Lift `Stm<A, E>` into `Effect<A, E, R>` |
+| `TQueue::bounded(n)` / `TQueue::unbounded()` | Transactional FIFO queues |
+| `queue.offer(v)` / `queue.take()` | Enqueue or dequeue transactionally |
+| `TMap::make()` / `map.get`, `set`, `delete` | Transactional map |
+| `TSemaphore::make(n)` / `acquire`, `release` | Transactional permit counter |
+
+## Scheduling
+
+| Function | Notes |
+|----------|-------|
+| `Schedule::recurs(n)` | Allow `n` additional iterations |
+| `Schedule::spaced(d)` | Fixed delay |
+| `Schedule::exponential(base)` | Exponential backoff |
+| `schedule.compose(other)` | Continue while both schedules continue; use max delay |
+| `schedule.jittered()` | Apply deterministic jitter |
+| `Schedule::recurs_while(pred)` | Continue while predicate holds |
+| `Schedule::recurs_until(pred)` | Continue until predicate holds |
+| `retry(|| make_effect(), schedule)` | Retry a one-shot effect factory |
+| `repeat(|| make_effect(), schedule)` | Repeat a one-shot effect factory |
+
+## Streams and Sinks
+
+| Function | Notes |
+|----------|-------|
+| `Stream::from_iterable(iter)` | Stream from iterable values |
+| `Stream::from_effect(effect)` | Stream from `Effect<Vec<A>, E, R>` |
+| `stream.map`, `filter`, `take`, `take_while`, `drop_while` | Stream transformations |
+| `stream.run_collect()` | Collect all elements into `Vec<A>` |
+| `stream.run_fold(init, f)` | Fold elements |
+| `stream.run_for_each(f)` | Run synchronous consumer |
+| `stream.run_for_each_effect(f)` | Run effectful consumer |
+| `Sink::collect()` | Sink collecting elements into `Vec` |
+| `Sink::fold_left(init, f)` | Folding sink |
+| `Sink::drain()` | Discarding sink |
+| `sink.run(stream)` | Run a sink against a stream |
 
 ## Schema
 
 | Function | Notes |
 |----------|-------|
-| `string()` | `Schema<String>` |
-| `i64()` | `Schema<i64>` |
-| `f64()` | `Schema<f64>` |
-| `boolean()` | `Schema<bool>` |
-| `optional(s)` | `Schema<Option<T>>` |
-| `array(s)` | `Schema<Vec<T>>` |
-| `struct_!(Type { … })` | Struct schema via macro |
-| `refine(s, pred, msg)` | Add a predicate constraint |
-| `parse(schema, unknown)` | Run schema; returns `Result<T, ParseErrors>` |
-| `Unknown::from_json_str(s)` | Parse JSON into `Unknown` |
-| `Unknown::from_serde_json(v)` | Convert `serde_json::Value` |
-
-## Macros
-
-| Macro | Notes |
-|-------|-------|
-| `effect!(…)` | Do-notation for effects; use `~expr` to bind |
-| `ctx!(Key => value, …)` | Build a `Context` from key-value pairs |
-| `service_key!(Name: Type)` | Declare a service key |
-| `pipe!(v, f, g, …)` | Pipeline for pure values |
+| `Unknown::{Null, Bool, I64, F64, String, Array, Object}` | Dynamic input values |
+| `string()`, `i64()`, `f64()`, `bool_()` | Primitive schemas |
+| `optional(s)`, `array(s)` | Container schemas |
+| `tuple`, `tuple3`, `tuple4` | Tuple schemas |
+| `struct_`, `struct3`, `struct4` | Struct schemas from field schemas |
+| `union_`, `union_chain` | Union schemas |
+| `filter(s, pred, msg)` / `refine(...)` | Validation refinements |
+| `transform(s, decode, encode)` | Bidirectional transformation |
+| `schema.decode(input)` | Decode typed wire input |
+| `schema.decode_unknown(&unknown)` | Decode `Unknown` input |
+| `ParseError::new(path, message)` | Single parse issue |
+| `ParseErrors::one(err)` / `ParseErrors::new(vec)` | Aggregate parse issues |

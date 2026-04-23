@@ -1,123 +1,64 @@
 # Sinks — Consuming Streams
 
-A `Stream` describes a sequence of values. A `Sink` describes how to consume them. Together they form a complete pipeline: `Stream` → operators → `Sink`.
+A `Sink<Out, In, E, R>` reduces a `Stream<In, E, R>` into an `Out`. It is a struct with a driver, not a trait you implement directly.
 
 ## Built-in Sinks
 
-Most of the time you don't write a `Sink` explicitly — you use one of the consuming methods on `Stream`:
+```rust,ignore
+use effectful::Sink;
 
-```rust
-// Collect all elements into a Vec
-let users: Effect<Vec<User>, DbError, Db> = all_users().collect();
+let collect = Sink::<Vec<User>, User, DbError, Db>::collect();
+let total = Sink::fold_left(0u64, |acc, order: Order| acc + order.amount);
+let drain = Sink::<(), Event, EventError, EventEnv>::drain();
+```
 
-// Fold into a single value
+Run a sink with `sink.run(stream)`.
+
+```rust,ignore
+let users: Effect<Vec<User>, DbError, Db> = Sink::collect().run(all_users());
+let total: Effect<u64, DbError, Db> = total.run(orders());
+```
+
+## Stream Consumer Methods
+
+For common cases, stream methods are often simpler.
+
+```rust,ignore
+let users: Effect<Vec<User>, DbError, Db> = all_users().run_collect();
+
 let total: Effect<u64, DbError, Db> = orders()
-    .fold(0u64, |acc, order| acc + order.amount);
+    .run_fold(0u64, |acc, order| acc + order.amount);
 
-// Run a side-effecting action for each element
-let logged: Effect<(), DbError, Db> = events()
-    .for_each(|event| log_event(event));
-
-// Drain (discard all values, run for side effects only)
-let drained: Effect<(), DbError, Db> = events()
-    .map(|e| emit_metric(e))
-    .drain();
-
-// Take the first N elements
-let first_ten: Effect<Vec<User>, DbError, Db> = all_users()
-    .take(10)
-    .collect();
+let logged: Effect<(), EventError, EventEnv> = events()
+    .run_for_each_effect(|event| log_event(event));
 ```
-
-Each of these methods turns a `Stream<A, E, R>` into an `Effect<B, E, R>`, which you can then run with `run_blocking` or compose further.
-
-## The Sink Trait
-
-When the built-in consumers aren't enough, implement `Sink`:
-
-```rust
-use effectful::{Sink, Chunk, Effect};
-
-struct CsvWriter {
-    path: PathBuf,
-    written: usize,
-}
-
-impl Sink<Record> for CsvWriter {
-    type Error = IoError;
-    type Env   = ();
-
-    fn on_chunk(
-        &mut self,
-        chunk: Chunk<Record>,
-    ) -> Effect<(), IoError, ()> {
-        effect! {
-            for record in &chunk {
-                ~ self.write_csv_line(record);
-            }
-            ()
-        }
-    }
-
-    fn on_done(&mut self) -> Effect<(), IoError, ()> {
-        effect! {
-            ~ self.flush();
-            ()
-        }
-    }
-}
-```
-
-`on_chunk` is called for each chunk of elements. `on_done` is called once when the stream ends — use it to flush buffers or close handles.
-
-## Running a Stream into a Sink
-
-```rust
-let writer = CsvWriter::new("output.csv");
-
-let effect: Effect<(), IoError, Db> = all_records()
-    .run_into_sink(writer);
-
-run_blocking(effect, env)?;
-```
-
-`run_into_sink` drives the stream and feeds each chunk to the sink. If the stream fails, `on_done` is not called — use resource scopes around the sink when cleanup is unconditionally required.
 
 ## Sink Composition
 
-Sinks can be composed: a `ZipSink` feeds the same stream to two sinks simultaneously:
+`Sink::zip` combines two fold-based sinks into one pass.
 
-```rust
-let count_sink  = CountSink::new();
-let csv_sink    = CsvWriter::new("out.csv");
+```rust,ignore
+let count = Sink::fold_left(0usize, |n, _order: Order| n + 1);
+let total = Sink::fold_left(0u64, |sum, order: Order| sum + order.amount);
 
-// Both sinks receive every element
-let combined = ZipSink::new(count_sink, csv_sink);
-
-all_records().run_into_sink(combined)
+let both = count.zip(total);
+let effect: Effect<(usize, u64), DbError, Db> = both.run(orders());
 ```
 
-Each element is delivered to both sinks in order. If either sink fails, the whole pipeline fails.
+`zip` panics if either sink was not created with `fold_left` / `from_fold`.
 
-## Finite vs Infinite Streams and Sinks
+## Other Built-ins
 
-A `Sink` doesn't know whether its stream is finite or infinite. Combine with `take`, `take_while`, or `take_until` to bound an infinite stream before running it into a sink:
+| Sink | Purpose |
+|------|---------|
+| `Sink::collect()` | Collect elements into `Vec<In>` |
+| `Sink::collect_all_while(pred)` | Collect until predicate first fails |
+| `Sink::collect_all_until(pred)` | Collect until predicate first succeeds |
+| `Sink::fold_left(init, f)` | Left fold |
+| `Sink::drain()` | Discard all elements |
+| `Sink::to_queue(queue)` | Offer each element to a queue |
+| `Sink::collect_to_map()` | Collect `(K, V)` pairs into `EffectHashMap` |
 
-```rust
-// Process at most 1 hour of events
-let one_hour = Duration::from_secs(3600);
+## Custom Sinks
 
-event_stream()
-    .take_until(sleep(one_hour))
-    .for_each(|event| process(event))
-```
-
-## Summary
-
-| Method | Returns | Use when |
-|--------|---------|----------|
-| `.collect()` | `Effect<Vec<A>, …>` | Small result sets that fit in memory |
-| `.fold(init, f)` | `Effect<B, …>` | Single aggregated value |
-| `.for_each(f)` | `Effect<(), …>` | Side effects per element |
-| `.drain()` | `Effect<(), …>` | Discard results, keep side effects |
-| `.run_into_sink(s)` | `Effect<(), …>` | Custom consumption logic |
+The current API does not expose a public trait for custom chunk callbacks. Build custom consumers with `Stream::run_fold`, `run_fold_effect`, `run_for_each_effect`, or compose existing `Sink` constructors.

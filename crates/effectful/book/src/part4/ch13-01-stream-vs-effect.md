@@ -1,75 +1,72 @@
 # Stream vs Effect — When to Use Each
 
-The choice is simple: how many values does your computation produce?
+The choice is about cardinality.
 
-```
-Effect<A, E, R>  → produces exactly one A (or fails)
-Stream<A, E, R>  → produces zero or more A values over time (or fails)
+```text
+Effect<A, E, R>  -> produces exactly one A or fails
+Stream<A, E, R>  -> produces zero or more A values or fails
 ```
 
 ## Concrete Examples
 
-```rust
-// Effect: get one user
+```rust,ignore
 fn get_user(id: u64) -> Effect<User, DbError, Db>
-
-// Stream: all users, one at a time
 fn all_users() -> Stream<User, DbError, Db>
 
-// Effect: count rows
 fn count_orders() -> Effect<u64, DbError, Db>
-
-// Stream: export all orders for a report
 fn export_orders() -> Stream<Order, DbError, Db>
 ```
 
-If you fetch 10 million rows into a `Vec` and return it as an `Effect`, you'll run out of memory. A `Stream` loads and processes them incrementally.
+If you fetch 10 million rows into a `Vec` and return it as an `Effect`, you can run out of memory. A `Stream` lets consumers process chunks incrementally.
 
 ## Stream Transformations
 
-`Stream` has the same transformation API as `Effect`:
-
-```rust
+```rust,ignore
 all_users()
-    .filter(|u| u.is_active())
-    .map(|u| UserSummary::from(u))
+    .filter(Box::new(|u: &User| u.is_active()))
+    .map(UserSummary::from)
     .take(100)
 ```
 
-`.map`, `.filter`, `.flat_map`, `.take`, `.drop`, `.zip` — all work on streams. None of them load the whole stream into memory; they process elements as they arrive.
+Current element operators include `map`, `filter`, `take`, `take_while`, `drop_while`, `map_effect`, and `map_par_n`.
 
 ## Collecting a Stream into an Effect
 
-When you do need all the results:
+When all results fit in memory, use `run_collect`.
 
-```rust
-let users: Effect<Vec<User>, DbError, Db> = all_users().collect();
+```rust,ignore
+let users: Effect<Vec<User>, DbError, Db> = all_users().run_collect();
 ```
 
-`.collect()` consumes the stream and accumulates into a `Vec`. Use only when the full result fits in memory.
+For large results, prefer a fold or a sink.
 
-For large results, prefer a fold or a sink:
-
-```rust
-let count: Effect<usize, DbError, Db> = all_users().fold(0, |acc, _| acc + 1);
+```rust,ignore
+let count: Effect<usize, DbError, Db> = all_users().run_fold(0, |acc, _| acc + 1);
 ```
 
 ## Converting Effect to Stream
 
-Wrap an `Effect` in a single-element stream when you need to compose with streaming operators:
+`Stream::from_effect` expects an effect that produces a `Vec<A>`.
 
-```rust
+```rust,ignore
 use effectful::Stream;
 
-let single_user_stream: Stream<User, DbError, Db> = Stream::from_effect(get_user(1));
+let one_user: Effect<Vec<User>, DbError, Db> = get_user(1).map(|user| vec![user]);
+let stream: Stream<User, DbError, Db> = Stream::from_effect(one_user);
+```
 
-// Now compose with other streams
-let combined = single_user_stream.chain(all_users());
+For pure finite streams, use `Stream::from_iterable`.
+
+```rust,ignore
+let numbers = Stream::from_iterable([1, 2, 3]);
 ```
 
 ## The Rule
 
-- Need one result: `Effect`
-- Need to process many results without loading all at once: `Stream`
-- Need to compose multiple streams: `Stream` with `chain`, `zip`, `merge`
-- Need all results in memory: `Stream` + `.collect()` (with appropriate size caution)
+| Need | Use |
+|------|-----|
+| One result | `Effect` |
+| Many results | `Stream` |
+| All stream results in memory | `stream.run_collect()` |
+| Aggregated result | `stream.run_fold(init, f)` or `Sink::fold_left` |
+| Custom consumer | `sink.run(stream)` |

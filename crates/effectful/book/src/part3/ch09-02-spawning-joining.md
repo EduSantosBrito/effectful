@@ -1,87 +1,68 @@
-# Spawning and Joining — fiber_all and Friends
+# Spawning and Joining — run_fork and fiber_all
 
-Running a single fiber is useful; running many concurrently is where Fibers shine.
+The current API uses `run_fork` to spawn effects and `FiberHandle` methods to join, inspect, or interrupt them.
 
-## fork: Spawn One Fiber
+## run_fork: Spawn One Fiber
 
-```rust
-let handle = compute_expensive_result().fork();
+```rust,ignore
+use effectful::{ThreadSleepRuntime, run_fork};
 
-// Do other work while the fiber runs
+let runtime = ThreadSleepRuntime;
+let handle = run_fork(&runtime, || (compute_expensive_result(), env));
+
 let local_result = local_computation();
-
-// Now join the fiber
-let remote_result = handle.join().await.into_result_or_panic()?;
+let remote_result = handle.join().await?;
 
 (local_result, remote_result)
 ```
 
-`fork` spawns the effect as a concurrent fiber. You can do other work and join later.
+The factory returns `(effect, env)` so the worker owns both the one-shot effect and its environment.
 
-## fiber_all: Run Many, Collect All
+## await_exit vs join
 
-```rust
-use effectful::fiber_all;
-
-// Run all concurrently; collect all results
-let results: Vec<User> = run_blocking(
-    fiber_all(user_ids.iter().map(|&id| fetch_user(id)))
-)?;
+```rust,ignore
+let exit: Exit<A, E> = run_async(handle.await_exit(), ()).await?;
+let result: Result<A, Cause<E>> = handle.join().await;
 ```
 
-`fiber_all` takes an iterable of effects, runs them all concurrently, and waits for every one to complete. If any fails, the first failure is returned (and any remaining fibers are cancelled).
+Use `await_exit` when you want the exact `Exit`; use `join` for a `Result` with `Cause<E>` on failure.
 
-For independent work where all results are needed, `fiber_all` is the idiomatic choice.
+## fiber_all
 
-## fiber_race: First to Complete Wins
+`fiber_all` joins already-created handles.
 
-```rust
-use effectful::fiber_race;
+```rust,ignore
+use effectful::{fiber_all, run_async};
 
-// Try primary and backup concurrently — take whichever responds first
-let data = run_blocking(
-    fiber_race(vec![fetch_from_primary(), fetch_from_backup()])
-)?;
-// The slower fiber is automatically cancelled
+let handles = user_ids
+    .into_iter()
+    .map(|id| run_fork(&runtime, move || (fetch_user(id), ())))
+    .collect::<Vec<_>>();
+
+let users: Vec<User> = run_async(fiber_all(handles), ()).await?;
 ```
 
-`fiber_race` returns as soon as any fiber succeeds. The others are interrupted. Useful for timeout patterns, geographic failover, and speculative execution.
+If any handle fails, `fiber_all` returns the first `Cause<E>` it observes.
 
-## fiber_any: First Success
+## Racing
 
-```rust
-use effectful::fiber_any;
+There is no `fiber_race` or `fiber_any` free function in the current API. `FiberHandle::or_else` races two handles and completes with whichever handle resolves first.
 
-// Try all; return first success (ignore failures until all done)
-let result = fiber_any(vec![
-    try_region_us(),
-    try_region_eu(),
-    try_region_ap(),
-])?;
+```rust,ignore
+let primary = run_fork(&runtime, || (fetch_from_primary(), ()));
+let backup = run_fork(&runtime, || (fetch_from_backup(), ()));
+
+let raced = primary.or_else(backup);
+let data = raced.join().await?;
 ```
 
-`fiber_any` differs from `fiber_race` in that it ignores failures and waits for the first *success*. Only if all fail does it return an error.
+The slower fiber is not automatically cancelled by `or_else`; keep its handle if you need to interrupt it.
 
-## run_fork: Low-Level Spawn
+## Error Behavior
 
-For cases where you need to spawn with full control:
-
-```rust
-use effectful::run_fork;
-
-let runtime = Runtime::current();
-let handle = run_fork(runtime, || (my_effect, my_env));
-```
-
-`run_fork` is the low-level primitive. `effect.fork()` is syntactic sugar over it when you're already inside an effect context.
-
-## Error Behaviour
-
-| Combinator | On any failure |
-|------------|---------------|
-| `fiber_all` | Cancel remaining, return first error |
-| `fiber_race` | Cancel remaining, return first success |
-| `fiber_any` | Wait for all, return first success or all errors |
-| `fork` + `join` | Whatever the individual fiber's `Exit` says |
-
-Choose based on whether partial success is acceptable and whether you want to wait for everyone.
+| Operation | Failure shape |
+|-----------|---------------|
+| `handle.join().await` | `Result<A, Cause<E>>` |
+| `handle.await_exit()` | `Exit<A, E>` inside an infallible effect |
+| `fiber_all(handles)` | `Effect<Vec<A>, Cause<E>, ()>` |
+| `handle.or_else(other)` | First handle completion wins |

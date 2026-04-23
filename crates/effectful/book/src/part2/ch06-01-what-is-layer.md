@@ -1,82 +1,64 @@
 # What Is a Layer?
 
-An `Effect` describes a computation that *needs* an environment. A `Layer` describes *how to build* part of that environment.
+An `Effect` describes a computation that needs an environment. A layer describes how to build values or services that can become that environment.
 
-Think of it this way:
+## Two Layer Surfaces
 
-```
-Effect<User, DbError, Database>
-  └── "I need a Database to produce a User"
+effectful currently exposes two related layer APIs.
 
-Layer<Database, ConfigError, Config>
-  └── "I need a Config to produce a Database"
-```
+```text
+LayerFn / LayerBuild
+  Builds typed values, often `Tagged<K, V>` cells for HList `Context`s.
 
-They're complementary. Effects declare their needs; Layers declare how to satisfy them.
-
-## The Layer Type
-
-```rust
-// Layer<Output, Error, Input>
-//        │       │      └── What I need to build
-//        │       └───────── What can go wrong while building
-//        └───────────────── What I produce
-Layer<Tagged<DatabaseKey>, DbError, Tagged<ConfigKey>>
+Layer<ROut, E, RIn>
+  Builds services into `ServiceContext` for derive-service applications.
 ```
 
-A layer that takes a `Tagged<ConfigKey>` and produces a `Tagged<DatabaseKey>`, possibly failing with `DbError`.
+## HList-Style Layer
 
-## A Simple Layer
+```rust,ignore
+use effectful::{LayerBuild, LayerFn, tagged};
 
-```rust
-use effectful::{Layer, LayerFn, effect, tagged};
+let db_layer = LayerFn(|| {
+    let pool = connect_pool_blocking(database_url)?;
+    Ok(tagged::<DatabaseKey, _>(pool))
+});
 
-let db_layer: Layer<Tagged<DatabaseKey>, DbError, Tagged<ConfigKey>> =
-    LayerFn::new(|config: &Tagged<ConfigKey>| {
-        effect! {
-            let pool = ~ connect_pool(config.value().db_url());
-            tagged::<DatabaseKey>(pool)
-        }
-    });
+let db_cell = db_layer.build()?;
 ```
 
-`LayerFn::new` wraps an effectful constructor. The closure takes the required input (the config) and returns an effect that produces the output (the database connection).
+`LayerFn` is lazy: construction does nothing; `build()` runs the constructor.
 
-## Layers as Values
+## ServiceContext Layer
 
-Like effects, layers are lazy descriptions. Constructing a `LayerFn` does nothing. The actual connection only happens when the layer is *built* — typically at application startup or at the top of a test.
+```rust,ignore
+use effectful::{Layer, Service};
 
-```rust
-// Build the layer (runs the constructor effect)
-let db: Tagged<DatabaseKey> = db_layer.build(my_config).await?;
+#[derive(Clone, Service)]
+struct Database { /* ... */ }
+
+let db_layer = Layer::succeed(Database::new());
+let context = run_blocking(db_layer.build(), ())?;
 ```
 
-Or more commonly, layers are composed and the whole graph is built at once (covered in §6.4).
+For dependencies, use `Layer::effect` and read upstream services from `ServiceContext`.
 
-## The Key Insight
-
-- **Effects** are programs. They describe *what to do* with dependencies.
-- **Layers** are constructors. They describe *how to build* dependencies.
-
-When you call `.provide_layer(some_layer)`, you're saying: "use this Layer's output to satisfy this Effect's `R`." The Layer builds the dependency; the Effect consumes it.
-
-## Lifecycle and Resource Safety
-
-Layers aren't just factories. They can also register cleanup:
-
-```rust
-LayerFn::new(|_: &Nil| {
-    effect! {
-        let pool = ~ connect_pool(url);
-        // Register cleanup: close pool on shutdown
-        ~ scope.add_finalizer(Finalizer::new(move || {
-            pool.close()
-        }));
-        tagged::<DatabaseKey>(pool)
-    }
-})
+```rust,ignore
+let db_layer = Layer::effect("Database", || {
+    Config::use_(|config| Database::connect(config.database_url))
+});
 ```
 
-The finalizer runs when the layer's scope is dropped — even if the application panics or a fiber is cancelled. This makes Layers the safe way to manage resources with expensive setup and teardown.
+## Providing to Effects
 
-Chapter 10 covers scopes and finalizers in detail. For now, know that Layers are where you register resource lifecycles.
+`Effect::provide(layer)` exists for `Effect<_, _, ServiceContext>`.
+
+```rust,ignore
+let result = run_blocking(my_app().provide(app_layer), ())?;
+```
+
+For typed `Context` environments, build the context and pass it directly to `run_blocking(effect, env)`.
+
+## Lifecycle
+
+Resource lifecycles are handled by `Scope`, `Pool`, and explicit finalizers. Layers are constructors; if a layer creates resources that require cleanup, make that cleanup part of the service design or the surrounding scope.

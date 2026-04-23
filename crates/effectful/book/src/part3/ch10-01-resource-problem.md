@@ -2,7 +2,7 @@
 
 RAII in synchronous code:
 
-```rust
+```rust,ignore
 {
     let file = File::open("data.txt")?;
     process(&file)?;
@@ -13,7 +13,7 @@ Reliable. Simple. The drop happens when the scope ends — no exceptions (unless
 
 ## The Async Complication
 
-```rust
+```rust,ignore
 async fn process_data() -> Result<(), Error> {
     let conn = open_connection().await?;
     let data = fetch_data(&conn).await?;  // What if this is cancelled?

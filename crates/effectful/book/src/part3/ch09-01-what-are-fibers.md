@@ -1,69 +1,61 @@
 # What Are Fibers? — Lightweight Structured Tasks
 
-A Fiber is an effect-managed async task. It's lighter than an OS thread and safer than a raw `tokio::spawn`.
+A fiber is an effectful concurrent task represented by `FiberHandle<A, E>`. It gives you a stable id, status inspection, interruption, and typed completion.
 
 ## Fibers vs. Raw Tasks
 
-```rust
-// Raw tokio::spawn — fire and forget
-// Who owns this? What happens if it panics?
-// When does it stop? Who cleans up?
+```rust,ignore
+// Raw tokio::spawn: lifecycle is owned by Tokio's JoinHandle.
 tokio::spawn(async {
     do_something().await;
 });
 
-// Effect Fiber — explicit lifecycle
-let handle: FiberHandle<Result, Error> = my_effect.fork();
-// You hold the handle. The fiber is yours.
-let exit: Exit<Error, Result> = handle.join().await;
-// The fiber stops when you join or drop the handle.
+// effectful fiber: lifecycle is explicit through FiberHandle<A, E>.
+let runtime = ThreadSleepRuntime;
+let handle: FiberHandle<User, DbError> = run_fork(&runtime, || (get_user(1), env));
+let result: Result<User, Cause<DbError>> = handle.join().await;
 ```
 
-With `tokio::spawn`, the task runs independently. If it panics, the panic is captured by Tokio and may or may not surface to you. There's no built-in way to cancel it or guarantee its resources are cleaned up.
-
-With `fork`, you get a `FiberHandle`. When you `join()`, you get the full `Exit` — success, typed failure, panic, or cancellation. When you drop the handle without joining, the fiber is cancelled automatically.
-
-## Structured Concurrency
-
-The key property of Fibers is *structured* lifecycle:
-
-- A fiber cannot outlive its parent scope without explicit permission
-- All spawned fibers are joined (or cancelled) before the parent effect completes
-- Panics and failures propagate through the fiber tree, not silently into the void
-
-This makes concurrent code much easier to reason about. When `process_batch` completes, all its helper fibers have completed too — or been cancelled and cleaned up.
+`join()` returns `Result<A, Cause<E>>`. Use `await_exit()` when you need `Exit<A, E>`.
 
 ## FiberId
 
-Each Fiber has a unique `FiberId`. You can use it for logging, tracing, and correlation:
+Each handle has a `FiberId`.
 
-```rust
-use effectful::FiberId;
-
-effect! {
-    let id = ~ current_fiber_id();
-    ~ log(&format!("[fiber:{id}] starting work"));
-    // ...
-}
+```rust,ignore
+let id = handle.id();
+log::debug!("spawned fiber {id:?}");
 ```
 
-`FiberId` flows through the fiber's execution automatically. You don't thread it manually.
+For code that needs to run under a specific fiber id, use `with_fiber_id(id, || ...)`.
 
 ## FiberHandle and FiberStatus
 
-`FiberHandle<E, A>` is the control interface for a spawned fiber:
-
-```rust
-let handle = my_effect.fork();
-
-// Check status without blocking
+```rust,ignore
 let status: FiberStatus = handle.status();
 
-// Join — blocks until the fiber completes
-let exit: Exit<E, A> = handle.join().await;
+match status {
+    FiberStatus::Running => {}
+    FiberStatus::Succeeded => {}
+    FiberStatus::Failed => {}
+    FiberStatus::Interrupted => {}
+}
 
-// Interrupt — ask the fiber to stop
 handle.interrupt();
 ```
 
-`FiberStatus` can be `Running`, `Completed`, or `Interrupted`. Unlike `tokio::JoinHandle`, you can inspect status without consuming the handle.
+`FiberHandle<A, E>` is cloneable. Status inspection does not consume the handle.
+
+## Structured Cleanup
+
+Fibers can be attached to a `Scope` with `handle.scoped()`. Closing the scope interrupts the fiber through a finalizer.
+
+```rust,ignore
+let scope = Scope::make();
+let scoped_effect = handle.scoped(); // Effect<A, Cause<E>, Scope>
+
+// Run scoped_effect with `scope`; when another owner closes `scope`,
+// the registered finalizer interrupts the handle.
+```
+
+Use scopes when a parent computation must own child-fiber cleanup.

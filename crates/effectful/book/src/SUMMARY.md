@@ -16,7 +16,7 @@
   - [Your First Real Program](./part1/ch02-04-real-program.md)
 - [The effect! Macro](./part1/ch03-00-effect-macro.md)
   - [Why Do-Notation Exists](./part1/ch03-01-why-do-notation.md)
-  - [The ~ Operator Explained](./part1/ch03-02-bind-operator.md)
+  - [The bind* Operator Explained](./part1/ch03-02-bind-operator.md)
   - [Error Handling Inside effect!](./part1/ch03-03-error-handling.md)
   - [When Not to Use the Macro](./part1/ch03-04-when-not-to-use.md)
 

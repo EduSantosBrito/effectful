@@ -6,10 +6,10 @@
 
 When there's exactly one effectful step and you're transforming its result, `flat_map` is cleaner:
 
-```rust
+```rust,ignore
 // Unnecessarily verbose
 effect! {
-    let id = ~ parse_id(raw);
+    let id = bind* parse_id(raw);
     id
 }
 
@@ -25,11 +25,11 @@ Use `effect!` when you have two or more sequential steps. For one, `flat_map` or
 
 Some patterns have named combinators that are more expressive than macros:
 
-```rust
+```rust,ignore
 // Instead of:
 effect! {
-    let a = ~ step_a();
-    let b = ~ step_b();
+    let a = bind* step_a();
+    let b = bind* step_b();
     (a, b)
 }
 
@@ -43,11 +43,11 @@ step_a().zip(step_b())
 
 The macro eliminates nesting between `flat_map` chains. But you can still create nested `effect!` blocks, which gets confusing:
 
-```rust
+```rust,ignore
 // CONFUSING — nested macro bodies
 effect! {
-    let result = ~ effect! {      // inner macro
-        let x = ~ inner_step();
+    let result = bind* effect! {      // inner macro
+        let x = bind* inner_step();
         x * 2
     };
     result + 1
@@ -55,7 +55,7 @@ effect! {
 
 // BETTER — flatten it
 effect! {
-    let x = ~ inner_step();
+    let x = bind* inner_step();
     let result = x * 2;
     result + 1
 }
@@ -68,14 +68,14 @@ If you feel the urge to nest `effect!` inside `effect!`, flatten the outer block
 The macro occasionally confuses the type inferencer, especially when the error type isn't pinned early. If you see cryptic "can't infer type" errors inside `effect!`:
 
 1. Annotate the return type of the enclosing function explicitly
-2. Add a `.map_error(Into::into)` on the first `~` binding to anchor `E`
+2. Add a `.map_error(Into::into)` on the first `bind*` binding to anchor `E`
 3. As a last resort, break out the inner logic into a named helper function
 
 ## When Generic Returns Are Needed
 
 Library code with polymorphic `A, E, R` sometimes can't use the macro cleanly:
 
-```rust
+```rust,ignore
 // This works fine with explicit function + effect!
 pub fn load_config<A, E, R>() -> Effect<A, E, R>
 where
@@ -96,7 +96,7 @@ The closure form of `effect!` (with `|_r: &mut R|`) is the right tool for generi
 
 | Situation | Prefer |
 |-----------|--------|
-| 2+ sequential steps | `effect! { ~ ... }` |
+| 2+ sequential steps | `effect! { bind* ... }` |
 | 1 step, simple transform | `.map` / `.flat_map` |
 | Independent steps | `.zip` / combinators |
 | Generic `<A, E, R>` graph builder | `effect!(|_r: &mut R| { ... })` |

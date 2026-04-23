@@ -1,97 +1,61 @@
 # Stacking Layers — Composition Patterns
 
-Individual layers do one thing. A real application needs them composed. effectful provides two composition patterns: sequential stacking and parallel merging.
+Layer composition is explicit. Use `Stack` / `and_then` for HList-style layers, and `merge` / `provide` / `provide_merge` for `ServiceContext` layers.
 
-## Sequential Stacking with .stack()
+## Independent HList Layers
 
-```rust
-use effectful::Stack;
+```rust,ignore
+use effectful::{LayerBuild, Stack};
 
-let app_env = config_layer
-    .stack(db_layer)       // Config → (Config, Database)
-    .stack(logger_layer)   // → (Config, Database, Logger)
-    .stack(service_layer); // → (Config, Database, Logger, Service)
+let stack = Stack(config_layer, logger_layer);
+let env = stack.build()?; // Cons<ConfigOutput, Cons<LoggerOutput, Nil>>
 ```
 
-Each `.stack()` takes the output of the previous layer and combines it with the new layer's output. The final type accumulates everything.
+The two layers must have the same error type.
 
-`.stack()` implies sequential ordering: `db_layer` runs after `config_layer` completes, because `db_layer` needs what `config_layer` produces.
+## Dependent HList Layers
 
-## Parallel Merging with merge_all
+Use `LayerExt::and_then` or `StackThen` when the second layer needs the first layer's output.
 
-When layers don't depend on each other, they can be built in parallel:
+```rust,ignore
+use effectful::{LayerBuild, LayerExt, LayerFn, LayerFnFrom};
 
-```rust
-use effectful::merge_all;
+let config = LayerFn(|| Ok(Config::from_env()?));
+let db = LayerFnFrom(|config: &Config| Ok(Database::connect(config.db_url())?));
 
-// These three layers are independent — build them concurrently
-let monitoring = merge_all!(
-    metrics_layer,
-    tracing_layer,
-    health_check_layer,
-);
+let env = config.and_then(db).build()?;
 ```
 
-`merge_all!` takes a list of layers with the same input type and merges their outputs. If the inputs are available, all three build concurrently.
+## ServiceContext merge
 
-## Combining Stack and merge_all
+For derive-service layers, `merge` builds independent layers and combines their `ServiceContext`s.
 
-In practice, you mix both:
-
-```rust
-let app_env = config_layer
-    .stack(db_layer)
-    .stack(
-        // cache and redis are independent of each other but both need config+db
-        merge_all!(cache_layer, redis_layer)
-    )
-    .stack(service_layer);
+```rust,ignore
+let app_layer = config_layer.merge(logger_layer);
+let context = run_blocking(app_layer.build(), ())?;
 ```
 
-The build graph:
-1. Build config
-2. Build db (needs config)
-3. Build cache and redis concurrently (both need config + db)
-4. Build service (needs all of the above)
+## ServiceContext provide
 
-## Building and Providing
+Use `provide` when one layer needs services from another layer and you want to hide provider output.
 
-Once you have a composed layer, build it and provide it to an effect:
-
-```rust
-// Build all layers, get back a Context with everything
-let env = app_env.build(()).await?;
-
-// Provide to the effect and run
-run_blocking(my_application().provide(env));
+```rust,ignore
+let db_with_config = db_layer.provide(config_layer);
+let context = run_blocking(db_with_config.build(), ())?;
 ```
 
-Or use `.provide_layer()` directly on an effect:
+Use `provide_merge` when you want both provider and dependent services in the final context.
 
-```rust
-run_blocking(
-    my_application()
-        .provide_layer(app_env)
-);
+```rust,ignore
+let app_layer = db_layer.provide_merge(config_layer);
 ```
 
-`.provide_layer()` builds the layer and provides its output in one step. This is the most common pattern at the application entry point.
+## Providing to Effects
 
-## The type_only Pattern for Tests
+`Effect::provide(layer)` exists for effects whose environment is `ServiceContext`.
 
-Tests often want a subset of services. You can stack only what the test needs:
-
-```rust
-#[test]
-fn test_user_service() {
-    let test_layer = config_layer.stack(mock_db_layer);
-
-    let result = run_test(
-        get_user(1)
-            .provide_layer(test_layer)
-    );
-    assert!(result.is_ok());
-}
+```rust,ignore
+let result = run_blocking(my_application().provide(app_layer), ())?;
 ```
 
-No need to build the full application stack. The test provides exactly what `get_user` requires — the type system enforces completeness.
+For typed `Context` / HList environments, build the context and pass it to `run_blocking(effect, env)`.

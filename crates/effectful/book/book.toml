@@ -7,6 +7,9 @@ language = "en"
 [build]
 build-dir = "book"
 
+[rust]
+edition = "2024"
+
 [output.html]
 default-theme = "rust"
 preferred-dark-theme = "coal"

@@ -1,92 +1,76 @@
 # Clock Injection — Testable Time
 
-`Schedule::exponential(100.ms()).take(3)` with real retries takes ~700ms to test. Multiply by hundreds of tests and your test suite takes minutes. `Clock` injection solves this.
+`retry` and `repeat` use a live clock by default. For deterministic tests, use the explicit-clock variants: `retry_with_clock`, `repeat_with_clock`, and their interruption-aware forms.
 
 ## The Clock Trait
 
-```rust
-use effectful::{Clock};
+```rust,ignore
+use std::time::{Duration, Instant};
+use effectful::{Effect, Never};
 
-// The Clock trait abstracts time
-trait Clock: Send + Sync {
-    fn now(&self) -> UtcDateTime;
+trait Clock {
+    fn now(&self) -> Instant;
     fn sleep(&self, duration: Duration) -> Effect<(), Never, ()>;
+    fn sleep_until(&self, deadline: Instant) -> Effect<(), Never, ()>;
 }
 ```
 
-All time-related operations in effectful go through the current fiber's `Clock`. Replace the clock, and "time" moves as fast as you drive it.
+`Clock` is monotonic-time oriented. Calendar time for logging is exposed separately through `LiveClock::now_utc()`.
 
 ## Production: LiveClock
 
-```rust
-use effectful::LiveClock;
+```rust,ignore
+use effectful::{LiveClock, ThreadSleepRuntime};
 
-// Uses real system time and tokio::time::sleep
-let live_clock = LiveClock::new();
+let live_clock = LiveClock::new(ThreadSleepRuntime);
 ```
 
-In production, inject `LiveClock` through the environment. Effect code never calls `std::time::SystemTime::now()` directly — it uses the injected clock.
+`LiveClock` delegates sleeping and `now()` to a runtime.
 
 ## Testing: TestClock
 
-```rust
-use effectful::TestClock;
+```rust,ignore
+use std::time::{Duration, Instant};
+use effectful::{Clock, TestClock};
 
-let clock = TestClock::new();
+let start = Instant::now();
+let clock = TestClock::new(start);
 
-// The clock starts at epoch and doesn't advance on its own
-assert_eq!(clock.now(), EPOCH);
+assert_eq!(clock.now(), start);
 
-// Advance time instantly
 clock.advance(Duration::from_secs(60));
-assert_eq!(clock.now(), EPOCH + 60s);
+assert_eq!(clock.now(), start + Duration::from_secs(60));
 ```
 
-`TestClock` is deterministic. It advances only when you tell it to. Sleep effects don't wait — they check the clock, and if the clock is past their wake time, they return immediately.
+`TestClock` records pending sleeps. Advancing or setting time drops pending sleeps whose deadlines have elapsed.
 
 ## Test Example
 
-```rust
-#[test]
-fn exponential_retry_makes_three_attempts() {
-    let clock = TestClock::new();
-    let attempts = Arc::new(AtomicU32::new(0));
+```rust,ignore
+use std::sync::{Arc, atomic::{AtomicU32, Ordering}};
+use std::time::{Duration, Instant};
+use effectful::{Schedule, TestClock, retry_with_clock, run_blocking};
 
-    let effect = {
+let clock = TestClock::new(Instant::now());
+let attempts = Arc::new(AtomicU32::new(0));
+
+let effect = retry_with_clock(
+    {
         let attempts = attempts.clone();
-        failing_operation(attempts.clone())
-            .retry(Schedule::exponential(Duration::from_secs(1)).take(3))
-    };
+        move || failing_operation(attempts.clone())
+    },
+    Schedule::exponential(Duration::from_secs(1)).compose(Schedule::recurs(3)),
+    clock.clone(),
+    None,
+);
 
-    // Fork the effect with the test clock
-    let handle = effect.fork_with_clock(&clock);
-
-    // Advance time to trigger each retry
-    clock.advance(Duration::from_secs(1));   // retry 1
-    clock.advance(Duration::from_secs(2));   // retry 2
-    clock.advance(Duration::from_secs(4));   // retry 3 (exhausted)
-
-    let exit = handle.join_blocking();
-    assert!(matches!(exit, Exit::Failure(_)));
-    assert_eq!(attempts.load(Ordering::Relaxed), 4);  // initial + 3 retries
-}
+let result = run_blocking(effect, ());
+assert!(result.is_err());
+assert_eq!(attempts.load(Ordering::Relaxed), 4); // initial + 3 retries
 ```
 
-The test runs in microseconds despite testing multi-second retry behaviour. No `tokio::time::pause()` hacks. No `sleep(Duration::ZERO)` workarounds.
+This test runs without sleeping in real time because `TestClock::sleep` only records deadlines.
 
-## Clock in the Environment
+## Clock as a Service
 
-Like all services, `Clock` lives in the effect environment:
-
-```rust
-service_key!(ClockKey: Arc<dyn Clock>);
-
-fn now() -> Effect<UtcDateTime, Never, impl NeedsClock> {
-    effect! {
-        let clock = ~ ClockKey;
-        clock.now()
-    }
-}
-```
-
-The production Layer provides `LiveClock`; test code provides `TestClock`. Business logic is identical in both contexts.
+For application logic that needs time directly, model the clock as a service in your environment. The scheduling helpers accept a clock value explicitly; your own services can do the same.

@@ -1,86 +1,76 @@
 # retry and repeat — Applying Policies
 
-`Schedule` is a policy description. `retry` and `repeat` are the two operations that apply it.
+`retry` and `repeat` apply a `Schedule` to effect factories. They are free functions because `Effect` values are one-shot.
 
-## retry: On Failure, Try Again
+## retry
 
-```rust
-use effectful::Schedule;
+```rust,ignore
+use std::time::Duration;
+use effectful::{Schedule, retry};
 
-let result = flaky_api_call()
-    .retry(Schedule::exponential(Duration::from_millis(100)).take(3));
+let result = retry(
+    || flaky_api_call(),
+    Schedule::exponential(Duration::from_millis(100)).compose(Schedule::recurs(3)),
+);
 ```
 
-`retry` runs the effect. If it fails, it checks the schedule. If the schedule says "continue", it waits the indicated delay and tries again. When the schedule says "done" or the effect succeeds, `retry` returns.
+`retry` runs the effect returned by the factory. If it fails and the schedule continues, it waits and calls the factory again. It returns the first success, or the last error when the schedule stops.
 
-Return value: the success value on success, or the last error if all retries are exhausted.
+## repeat
 
-## retry_while: Conditional Retry
+```rust,ignore
+use std::time::Duration;
+use effectful::{Schedule, repeat};
 
-Not all errors are retriable. Retry only when the error matches a condition:
-
-```rust
-let result = api_call()
-    .retry_while(
-        Schedule::exponential(Duration::from_millis(100)).take(5),
-        |error| error.is_transient(),  // only retry transient errors
-    );
+let polling = repeat(
+    || check_job_status(),
+    Schedule::spaced(Duration::from_secs(5)).compose(Schedule::recurs(12)),
+);
 ```
 
-Permanent errors (e.g., 404 Not Found, permission denied) shouldn't be retried — they won't go away. `.retry_while` lets you distinguish them.
-
-## repeat: On Success, Run Again
-
-```rust
-let polling = check_job_status()
-    .repeat(Schedule::spaced(Duration::from_secs(5)));
-```
-
-`repeat` runs the effect. When it *succeeds*, it checks the schedule. If the schedule says "continue", it waits and runs again. This is the complement of `retry`: same mechanism, triggered by success instead of failure.
+`repeat` runs once, then continues while the schedule continues. It returns the last success value.
 
 Use cases:
-- Poll for job completion every 5 seconds
-- Send heartbeats every 30 seconds
+
+- Poll for job completion every few seconds
+- Send a bounded number of heartbeats
 - Refresh a cache on a fixed interval
 
-## repeat_until: Stop When Condition Met
+## Explicit Clock Variants
 
-```rust
-let waiting_for_ready = poll_service()
-    .repeat_until(
-        Schedule::spaced(Duration::from_secs(1)),
-        |status| status == ServiceStatus::Ready,
-    );
+Use `retry_with_clock` and `repeat_with_clock` when tests need a deterministic clock.
+
+```rust,ignore
+use effectful::{Schedule, TestClock, retry_with_clock};
+use std::time::{Duration, Instant};
+
+let clock = TestClock::new(Instant::now());
+let effect = retry_with_clock(
+    || flaky_api_call(),
+    Schedule::exponential(Duration::from_millis(100)).compose(Schedule::recurs(3)),
+    clock,
+    None,
+);
 ```
 
-`repeat_until` repeats until the success value satisfies a predicate. When the condition is met, it stops and returns the value.
+The `_and_interrupt` variants also accept a `CancellationToken`.
 
-## Composition with Other Operations
+## Conditional Retry
 
-`retry` and `repeat` return effects — they compose like everything else:
+The current API does not include `retry_while` or an error predicate parameter. `retry` retries every failure until the schedule stops. If you need error-sensitive retry, write a small custom loop around `Effect::run` or add that policy at the call site before using `retry`.
 
-```rust
-// Retry the individual call, then repeat the whole batch
-let batch = process_single_item(item)
-    .retry(Schedule::exponential(100.ms()).take(3));
+## Composition
 
-let continuous = batch
-    .repeat(Schedule::spaced(Duration::from_secs(60)));
+`retry` and `repeat` return ordinary effects.
+
+```rust,ignore
+let batch = retry(
+    || process_single_item(item.clone()),
+    Schedule::exponential(Duration::from_millis(100)).compose(Schedule::recurs(3)),
+);
+
+let continuous = repeat(
+    move || batch_factory(),
+    Schedule::spaced(Duration::from_secs(60)).compose(Schedule::recurs(10)),
+);
 ```
-
-## Error Information in Retry
-
-If you need to inspect errors during retry (for logging, metrics, etc.):
-
-```rust
-let instrumented = risky_call()
-    .retry_with_feedback(
-        Schedule::exponential(100.ms()).take(3),
-        |attempt, error| {
-            // Called before each retry
-            println!("Attempt {attempt} failed: {error:?}");
-        },
-    );
-```
-
-`retry_with_feedback` passes the attempt number and the error to a side-effectful callback before each retry. Useful for structured logging of retry behaviour.

@@ -1,73 +1,68 @@
 # FiberRef — Fiber-Local State
 
-`FiberRef` is the effect equivalent of thread-local storage. It holds a value that's scoped to the current fiber — each fiber has its own independent copy.
+`FiberRef<A>` stores values keyed by `(FiberRef id, FiberId)`. It is useful for trace ids, request context, and other fiber-local data.
 
-## Defining a FiberRef
+## Creating a FiberRef
 
-```rust
-use effectful::FiberRef;
+```rust,ignore
+use effectful::{FiberRef, run_blocking};
 
-// A fiber-local trace ID, defaulting to "none"
-static TRACE_ID: FiberRef<String> = FiberRef::new(|| "none".to_string());
+let trace_id: FiberRef<String> = run_blocking(
+    FiberRef::make(|| "none".to_string()),
+    (),
+)?;
 ```
 
-`FiberRef::new` takes a factory closure that produces the initial value for each fiber. The static variable is the *key*; each fiber has its own value.
+`FiberRef::make` returns an effect because allocation is part of the effect runtime model.
 
 ## Reading and Writing
 
-```rust
-effect! {
-    // Set the trace ID for this fiber
-    ~ TRACE_ID.set("req-abc-123".to_string());
+```rust,ignore
+let program = effect! {
+    bind* trace_id.set("req-abc-123".to_string());
 
-    // Read it anywhere in this fiber's call stack
-    let id = ~ TRACE_ID.get();
-    ~ log(&format!("[{id}] processing request"));
+    let id = bind* trace_id.get();
+    bind* log(&format!("[{id}] processing request"));
 
-    ~ process_request();
-    Ok(())
-}
-```
-
-`set` and `get` are both effects (they need the fiber context). Inside `effect!`, use `~` to bind them.
-
-## FiberRef Doesn't Cross Fiber Boundaries
-
-When you `fork` a new fiber, it starts with its own copy of the FiberRef value (the factory closure runs again):
-
-```rust
-effect! {
-    ~ TRACE_ID.set("parent-123".to_string());
-    
-    let child = effect! {
-        let id = ~ TRACE_ID.get();
-        // id is "none" — the fork starts fresh
-        println!("child trace id: {id}");
-    }.fork();
-    
-    ~ child.join();
-    Ok(())
-}
-```
-
-If you want the child to inherit the parent's value, pass it explicitly or use `FiberRef::inherit`:
-
-```rust
-let child_with_inherited = effect! {
-    let id = ~ TRACE_ID.get();
-    TRACE_ID.locally(id, child_effect())  // child sees parent's value
+    bind* process_request()
 };
 ```
 
-`locally(value, effect)` runs the effect with a temporarily overridden FiberRef value, then restores the previous value when done.
+Available operations include `get`, `set`, `update`, `modify`, `reset`, `locally`, and `locally_with`.
 
-## Common Use Cases
+## Fork and Join Hooks
 
-| Use Case | Pattern |
-|----------|---------|
-| Request tracing / correlation IDs | `static TRACE_ID: FiberRef<String>` |
-| Per-request user context | `static CURRENT_USER: FiberRef<Option<UserId>>` |
-| Metrics labels | `static OPERATION: FiberRef<&'static str>` |
-| Debug context | `static CALL_PATH: FiberRef<Vec<String>>` |
+When you manage logical child fibers yourself, use `on_fork` and `on_join` to seed and merge fiber-local values.
 
-`FiberRef` makes it easy to carry contextual information through deep call stacks without threading extra parameters everywhere — the fiber equivalent of request-scoped context in traditional web frameworks.
+```rust,ignore
+let parent = FiberId::ROOT;
+let child = FiberId::fresh();
+
+run_blocking(trace_id.on_fork(parent, child), ())?;
+
+with_fiber_id(child, || {
+    run_blocking(trace_id.set("child-trace".to_string()), ())
+})?;
+
+run_blocking(trace_id.on_join(parent, child), ())?;
+```
+
+The default fork behavior clones the parent value into the child. The default join behavior keeps the child value.
+
+## Local Overrides
+
+`locally(value, effect)` overrides the current fiber's value while the inner effect runs, then restores the previous value.
+
+```rust,ignore
+let inner = trace_id.locally(
+    "override".to_string(),
+    trace_id.get(),
+);
+
+let value = run_blocking(inner, ())?;
+assert_eq!(value, "override");
+```
+
+## Current Limitations
+
+Fiber identity is stored in a thread-local cell. This matches single-threaded `run_blocking` and current-thread Tokio runtimes. Multi-threaded task migration is not tracked yet.

@@ -4,7 +4,7 @@ Let's build something complete: a small program that loads configuration, connec
 
 ## The Domain
 
-```rust
+```rust,ignore
 #[derive(Debug)]
 struct Config {
     db_url: String,
@@ -29,7 +29,7 @@ enum AppError {
 
 Each step is a focused effect:
 
-```rust
+```rust,ignore
 use effectful::{Effect, effect, succeed, fail};
 
 fn load_config() -> Effect<Config, AppError, ()> {
@@ -59,12 +59,12 @@ fn format_greeting(config: &Config, user: &User) -> String {
 
 Now we compose these steps into one effect using `effect!`:
 
-```rust
+```rust,ignore
 fn greet_user(user_id: u64) -> Effect<String, AppError, ()> {
     effect! {
-        let config = ~ load_config();
-        let db     = ~ connect_db(&config);
-        let user   = ~ fetch_user(&db, user_id);
+        let config = bind* load_config();
+        let db     = bind* connect_db(&config);
+        let user   = bind* fetch_user(&db, user_id);
         format_greeting(&config, &user)
     }
 }
@@ -82,9 +82,9 @@ Nothing has run yet. `greet_user(42)` is a value.
 
 At the edge of the program — in `main` — we execute:
 
-```rust
+```rust,ignore
 fn main() {
-    match run_blocking(greet_user(42)) {
+    match run_blocking(greet_user(42), ()) {
         Ok(greeting) => println!("{greeting}"),
         Err(AppError::Config(msg)) => eprintln!("Config error: {msg}"),
         Err(AppError::Database(msg)) => eprintln!("DB error: {msg}"),
@@ -96,15 +96,15 @@ fn main() {
 
 Because the effect is a description, testing is straightforward — just swap out the underlying steps:
 
-```rust
+```rust,ignore
 #[test]
 fn test_greeting_format() {
     let effect = effect! {
-        let config = ~ succeed(Config {
+        let config = bind* succeed(Config {
             db_url: "unused".into(),
             app_name: "TestApp".into(),
         });
-        let user = ~ succeed(User {
+        let user = bind* succeed(User {
             id: 1,
             name: "Alice".into(),
             email: "alice@example.com".into(),
@@ -112,8 +112,8 @@ fn test_greeting_format() {
         format_greeting(&config, &user)
     };
 
-    let result = run_test(effect);
-    assert_eq!(result.unwrap(), "TestApp: Hello, Alice! (alice@example.com)");
+    let result = run_test(effect, ());
+    assert!(matches!(result, Exit::Success(greeting) if greeting == "TestApp: Hello, Alice! (alice@example.com)"));
 }
 ```
 
@@ -125,7 +125,7 @@ You've written a complete effect-based program. Along the way you used:
 
 - `succeed` and `fail` to construct effects from values
 - `.map` and `.map_error` to transform success and error types
-- `effect! { ~ ... }` to sequence effects without callback nesting
+- `effect! { bind* ... }` to sequence effects without callback nesting
 - `run_blocking` to execute at the program edge
 - `run_test` to verify behaviour in tests
 

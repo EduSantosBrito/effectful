@@ -1,83 +1,50 @@
-# Recovery Combinators — catch, fold, and Friends
+# Recovery Combinators — catch and Friends
 
-Knowing about `Cause` and `Exit` is only useful if you can act on them. effectful provides a focused set of recovery combinators.
+The current `Effect` recovery surface works with typed errors `E`. `Cause<E>` appears in `Exit` and fibers, not in ordinary `catch` handlers.
 
-## catch: Handle Expected Errors
+## catch
 
-`catch` intercepts `Cause::Fail(e)` and gives you a chance to recover:
+`catch` handles a typed failure by returning another effect.
 
-```rust
-let resilient = risky_db_call()
-    .catch(|error: DbError| {
-        match error {
-            DbError::NotFound => succeed(User::anonymous()),
-            other => fail(other),  // re-raise anything else
-        }
-    });
-```
-
-If `risky_db_call` fails with `Cause::Fail(e)`, the closure runs. If it fails with `Cause::Die` or `Cause::Interrupt`, those propagate unchanged — `catch` only handles typed failures.
-
-## catch_all: Handle Everything
-
-`catch_all` intercepts any `Cause`:
-
-```rust
-let bulletproof = my_effect.catch_all(|cause| match cause {
-    Cause::Fail(e)   => handle_expected_error(e),
-    Cause::Die(_)    => succeed(fallback_value()),
-    Cause::Interrupt => succeed(cancelled_gracefully()),
+```rust,ignore
+let resilient = risky_db_call().catch(|error: DbError| {
+    match error {
+        DbError::NotFound => succeed(User::anonymous()),
+        other => fail(other),
+    }
 });
 ```
 
-Use `catch_all` when you genuinely need to handle panics or cancellation — typically at resource boundaries or top-level handlers. Don't use it to swallow defects silently.
+Use `catch` when recovery itself may still fail.
 
-## fold: Handle Both Paths
+## catch_all
 
-`fold` transforms both success and failure into a uniform success type:
+`catch_all` maps any typed error into a fallback success value. The returned effect is infallible through `E`.
 
-```rust
-let always_string: Effect<String, Never, ()> = risky_call()
-    .fold(
-        |error| format!("Error: {error}"),
-        |value| format!("Success: {value}"),
-    );
+```rust,ignore
+let user = fetch_user(id).catch_all(|_error| User::anonymous());
 ```
 
-After `fold`, the effect never fails (`E = Never`). Both arms produce the same type. This is useful for logging, metrics, or converting to a neutral representation.
+Despite the name, this does not handle `Cause::Die` or `Cause::Interrupt`; it handles the effect's typed error channel.
 
-## or_else: Try an Alternative
+## tap_error
 
-`or_else` runs an alternative effect on failure:
+`tap_error` runs an effect when the source fails, then re-emits the original error if the tap succeeds.
 
-```rust
-let with_fallback = primary_source()
-    .or_else(|_err| secondary_source());
+```rust,ignore
+let observed = risky_call().tap_error(|message| log_error(message));
 ```
 
-If `primary_source` fails, `secondary_source` runs. If that also fails, the combined effect fails with the second error. Useful for fallback chains.
+The handler receives a debug-formatted string because the original error is re-emitted without requiring `Clone`.
 
-## ignore_error: Discard Failures
+## map_error
 
-When you genuinely don't care about an operation's success:
+Use `map_error` to translate errors into your application error type.
 
-```rust
-// Log "best effort" — failure is acceptable
-let logged_effect = log_metrics()
-    .ignore_error()
-    .flat_map(|_| actual_work());
+```rust,ignore
+let effect = db_call().map_error(AppError::Database);
 ```
 
-`ignore_error` converts `Effect<A, E, R>` to `Effect<Option<A>, Never, R>`. The effect always "succeeds" — with `Some(value)` on success or `None` on failure.
+## Not Present Yet
 
-## The Recovery Hierarchy
-
-```
-catch(f)      — handles Cause::Fail only
-catch_all(f)  — handles all Cause variants
-fold(on_e, on_a) — transforms both paths to success
-or_else(f)    — runs alternative on failure
-ignore_error  — converts failure to Option
-```
-
-Prefer the narrowest combinator that solves your problem. `catch` for expected errors. `catch_all` only when you need to touch panics or cancellation.
+The current API does not include `fold`, `or_else`, or `ignore_error` methods on `Effect`. Use `catch`, `catch_all`, `map`, and `map_error`, or pattern match on `run_blocking(effect, env)` at a boundary.

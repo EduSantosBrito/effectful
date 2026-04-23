@@ -1,93 +1,63 @@
 # The Unknown Type — Unvalidated Wire Data
 
-`Unknown` is the type for data that hasn't been validated yet. Think of it as a typed `serde_json::Value` — it can hold any shape of data, but you can't do anything useful with it until you run it through a schema.
+`Unknown` is effectful's dynamic input tree for schema decoding. It represents JSON-like data without trusting its shape.
 
 ## Creating Unknown Values
 
-```rust
+```rust,ignore
+use std::collections::BTreeMap;
 use effectful::schema::Unknown;
 
-// From a JSON string
-let u: Unknown = Unknown::from_json_str(r#"{"name": "Alice", "age": 30}"#)?;
+let s = Unknown::String("hello".to_string());
+let n = Unknown::I64(42);
+let b = Unknown::Bool(true);
+let null = Unknown::Null;
+let arr = Unknown::Array(vec![Unknown::I64(1), Unknown::I64(2)]);
 
-// From a serde_json Value
-let v: serde_json::Value = serde_json::json!({ "name": "Alice" });
-let u: Unknown = Unknown::from_serde_json(v);
+let mut fields = BTreeMap::new();
+fields.insert("name".to_string(), Unknown::String("Alice".to_string()));
+fields.insert("age".to_string(), Unknown::I64(30));
+let obj = Unknown::Object(fields);
+```
 
-// From raw parts
-let u: Unknown = Unknown::object([
-    ("name", Unknown::string("Alice")),
-    ("age",  Unknown::integer(30)),
-]);
+With the `schema-serde` feature, convert from `serde_json::Value` using `unknown_from_serde_json`.
 
-// Primitives
-let s: Unknown = Unknown::string("hello");
-let n: Unknown = Unknown::integer(42);
-let b: Unknown = Unknown::boolean(true);
-let null: Unknown = Unknown::null();
-let arr: Unknown = Unknown::array([Unknown::integer(1), Unknown::integer(2)]);
+```rust,ignore
+use effectful::schema::unknown_from_serde_json;
+
+let value: serde_json::Value = serde_json::from_str(input)?;
+let unknown = unknown_from_serde_json(value);
 ```
 
 ## Why Not serde_json::Value Directly?
 
-`serde_json::Value` is an excellent data type, but it's stringly typed: `value["name"]` gives you an `Option<&Value>` and there's no structure around parse errors, path tracking, or accumulation. `Unknown` wraps the same idea but integrates with effectful's schema parser, which gives you:
-
-- **Path tracking** — "error at `.users[3].email`"
-- **Accumulated errors** — all failures in one parse, not just the first
-- **Composable schemas** — build complex validators from simple primitives
+`serde_json::Value` is useful at the edge, but schemas need a stable internal representation with effectful's parse errors and combinators. `Unknown` gives schema decoders one input model independent of where the data came from.
 
 ## Inspecting Unknown Values
 
-You don't normally inspect `Unknown` directly — you run it through a schema. But when debugging:
+Most code should not inspect `Unknown` directly. Decode it with a `Schema`. For debugging or custom decoders, match on the enum variants.
 
-```rust
-// Check what shape the value has
-match u.kind() {
-    UnknownKind::Object(fields) => { /* … */ }
-    UnknownKind::Array(elems)   => { /* … */ }
-    UnknownKind::String(s)      => { /* … */ }
-    UnknownKind::Integer(n)     => { /* … */ }
-    UnknownKind::Float(f)       => { /* … */ }
-    UnknownKind::Boolean(b)     => { /* … */ }
-    UnknownKind::Null            => { /* … */ }
+```rust,ignore
+match &unknown {
+    Unknown::Object(fields) => { /* inspect fields */ }
+    Unknown::Array(items) => { /* inspect items */ }
+    Unknown::String(value) => { /* inspect string */ }
+    Unknown::I64(value) => { /* inspect integer */ }
+    Unknown::F64(value) => { /* inspect float */ }
+    Unknown::Bool(value) => { /* inspect bool */ }
+    Unknown::Null => { /* inspect null */ }
 }
-
-// Access a field without parsing (returns Option<&Unknown>)
-let name: Option<&Unknown> = u.field("name");
 ```
 
 ## The Parse Boundary
 
-`Unknown` is your import type. At every IO boundary — HTTP handler, NATS message, config file, database row — convert incoming data to `Unknown` first, then parse it with a schema:
+Use `Unknown` at I/O boundaries, then decode once into trusted domain types.
 
-```rust
-async fn handle_request(body: Bytes) -> Effect<CreateUserResponse, ApiError, Deps> {
-    effect! {
-        // Convert raw bytes to Unknown
-        let raw = Unknown::from_json_bytes(&body)
-            .map_err(ApiError::InvalidJson)?;
+```rust,ignore
+use effectful::schema::{Unknown, string};
 
-        // Parse Unknown into a typed, validated struct
-        let req: CreateUserRequest = ~ parse_schema(create_user_schema(), raw);
-
-        // Now req is fully trusted — proceed with domain logic
-        ~ create_user(req)
-    }
-}
+let raw = Unknown::String("alice@example.com".to_string());
+let email = string::<()>().decode_unknown(&raw)?;
 ```
 
-Nothing beyond the parse boundary sees `Unknown`. Domain functions only accept validated types.
-
-## Unknown and Serde
-
-If you have existing `serde`-deserializable types, use the serde bridge (requires the `schema-serde` feature):
-
-```rust
-use effectful::schema::serde_bridge::unknown_from_serde_json;
-
-// Deserialise via serde, then convert to Unknown for schema validation
-let value: serde_json::Value = serde_json::from_str(input)?;
-let u: Unknown = unknown_from_serde_json(value);
-```
-
-This lets you incrementally adopt the schema system without rewriting all your serde impls at once.
+Nothing beyond the parse boundary should accept `Unknown`; domain functions should accept validated types.

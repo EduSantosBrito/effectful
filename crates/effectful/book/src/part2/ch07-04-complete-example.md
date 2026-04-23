@@ -1,131 +1,107 @@
-# A Complete DI Example — Putting It All Together
+# A Complete DI Example — Putting It Together
 
-This section builds a small but complete application with three services, a Layer graph, and both production and test wiring. It's the capstone of Part II.
+This example uses the current derive-service / `ServiceContext` layer API.
 
-## The Domain
+## Domain
 
-A blog API with users, posts, and notifications:
-
-```rust
-// Domain types
+```rust,ignore
 struct User { id: u64, name: String, email: String }
 struct Post { id: u64, author_id: u64, title: String, body: String }
-enum AppError { Db(DbError), Notify(NotifyError) }
+enum AppError { Db(DbError), Notify(NotifyError), Missing(MissingService) }
 ```
 
-## Three Service Traits
+## Services
 
-```rust
-trait UserRepository: Send + Sync {
-    fn get_user(&self, id: u64) -> Effect<User, DbError, ()>;
+```rust,ignore
+#[derive(Clone, Service)]
+struct UserRepository {
+    inner: Arc<dyn UserRepositoryImpl>,
 }
 
-trait PostRepository: Send + Sync {
-    fn get_posts_by_author(&self, author_id: u64) -> Effect<Vec<Post>, DbError, ()>;
+#[derive(Clone, Service)]
+struct PostRepository {
+    inner: Arc<dyn PostRepositoryImpl>,
 }
 
-trait NotificationService: Send + Sync {
-    fn send_welcome(&self, to: &str) -> Effect<(), NotifyError, ()>;
-}
-
-service_key!(UserRepoKey:   Arc<dyn UserRepository>);
-service_key!(PostRepoKey:   Arc<dyn PostRepository>);
-service_key!(NotifierKey:   Arc<dyn NotificationService>);
-```
-
-## The Business Logic
-
-```rust
-fn get_author_feed(author_id: u64)
--> Effect<(User, Vec<Post>), AppError, impl NeedsUserRepo + NeedsPostRepo>
-{
-    effect! {
-        let user_repo = ~ UserRepoKey;
-        let post_repo = ~ PostRepoKey;
-        let user  = ~ user_repo.get_user(author_id).map_error(AppError::Db);
-        let posts = ~ post_repo.get_posts_by_author(author_id).map_error(AppError::Db);
-        (user, posts)
-    }
-}
-
-fn register_user(name: &str, email: &str)
--> Effect<User, AppError, impl NeedsUserRepo + NeedsNotifier>
-{
-    effect! {
-        let repo     = ~ UserRepoKey;
-        let notifier = ~ NotifierKey;
-        let user = ~ repo.create_user(name, email).map_error(AppError::Db);
-        ~ notifier.send_welcome(&user.email).map_error(AppError::Notify);
-        user
-    }
+#[derive(Clone, Service)]
+struct Notifier {
+    inner: Arc<dyn NotificationImpl>,
 }
 ```
 
-## Production Layer Graph
+Each service struct is cloneable and acts as its own lookup key.
 
-```rust
-let prod_graph = LayerGraph::new()
-    .add(LayerNode::new("config",   config_layer))
-    .add(LayerNode::new("db",       pg_db_layer).requires("config"))
-    .add(LayerNode::new("users",    pg_user_repo_layer).requires("db"))
-    .add(LayerNode::new("posts",    pg_post_repo_layer).requires("db"))
-    .add(LayerNode::new("notifier", smtp_notifier_layer).requires("config"));
+## Business Logic
 
+```rust,ignore
+fn get_author_feed(author_id: u64) -> Effect<(User, Vec<Post>), AppError, ServiceContext> {
+    UserRepository::use_(move |users| {
+        PostRepository::use_(move |posts| {
+            effect! {
+                let user = bind* users.get_user(author_id).map_error(AppError::Db);
+                let posts = bind* posts.get_posts_by_author(author_id).map_error(AppError::Db);
+                (user, posts)
+            }
+        })
+    })
+}
+```
+
+The function depends on service types, not concrete infrastructure.
+
+## Production Layers
+
+```rust,ignore
+let config_layer = Layer::succeed(Config::from_env());
+
+let db_layer = Layer::effect("Database", || {
+    Config::use_(|config| Database::connect(config.database_url))
+});
+
+let user_repo_layer = Layer::effect("UserRepository", || {
+    Database::use_(|db| succeed(UserRepository::postgres(db)))
+});
+
+let post_repo_layer = Layer::effect("PostRepository", || {
+    Database::use_(|db| succeed(PostRepository::postgres(db)))
+});
+
+let app_layer = user_repo_layer
+    .merge(post_repo_layer)
+    .provide_merge(db_layer.provide_merge(config_layer));
+```
+
+Run at the edge:
+
+```rust,ignore
 fn main() {
-    let plan = prod_graph.plan().expect("layer graph has no cycles");
-    run_blocking(
-        get_author_feed(1).provide_layer(plan)
-    ).expect("app failed");
+    let result = run_blocking(get_author_feed(1).provide(app_layer), ());
+    println!("{result:?}");
 }
 ```
 
 ## Test Wiring
 
-```rust
-fn make_test_layer() -> impl Layer<Output, (), Nil> {
-    let users = mock_user_repo(&[alice(), bob()]);
-    let posts  = mock_post_repo(&[alice_post()]);
-    let notify = capturing_notifier();
-
-    user_repo_layer(users)
-        .stack(post_repo_layer(posts))
-        .stack(notifier_layer(notify))
+```rust,ignore
+fn test_layer() -> Layer<(UserRepository, PostRepository), AppError, ()> {
+    Layer::succeed(UserRepository::in_memory([alice(), bob()]))
+        .merge(Layer::succeed(PostRepository::in_memory([alice_post()])))
 }
 
 #[test]
-fn feed_includes_authors_posts() {
-    let result = run_test(
-        get_author_feed(1).provide_layer(make_test_layer())
-    ).unwrap();
-    assert_eq!(result.1.len(), 1);
-    assert_eq!(result.1[0].title, "Alice's Post");
-}
-
-#[test]
-fn registration_sends_welcome_email() {
-    let notifier = capturing_notifier();
-    let result = run_test(
-        register_user("Carol", "carol@example.com")
-            .provide_layer(
-                mock_user_repo_layer(&[]).stack(notifier_layer(notifier.clone()))
-            )
-    );
-    assert!(result.is_ok());
-    assert_eq!(notifier.sent_count(), 1);
+fn feed_includes_author_posts() {
+    let exit = run_test(get_author_feed(1).provide(test_layer()), ());
+    assert!(matches!(exit, Exit::Success((_, posts)) if posts.len() == 1));
 }
 ```
 
 ## What This Demonstrates
 
-The business logic functions (`get_author_feed`, `register_user`) are completely decoupled from the infrastructure:
-- They declare their needs via `NeedsX` bounds
-- They access services via `~ ServiceKey`
-- They know nothing about Postgres, SMTP, or any concrete type
+Business logic is decoupled from infrastructure:
 
-The Layer graph wires concrete implementations at the entry point. Swapping Postgres for SQLite or SMTP for SendGrid requires changing only the layer definition — not a single line of business logic.
+- It reads services from `ServiceContext`.
+- Production and tests provide different layers.
+- Layer composition happens at the edge.
+- Missing services fail through `MissingService` if requested at runtime.
 
-That's compile-time dependency injection: the full dependency graph is verified by the type checker, not discovered at runtime.
-
----
-
-You've completed Part II. The next section of the book shifts to operational concerns: how to handle errors properly, run fibers concurrently, manage resources safely, and schedule repeated work.
+Part III shifts to operational concerns: errors, fibers, resources, and scheduling.

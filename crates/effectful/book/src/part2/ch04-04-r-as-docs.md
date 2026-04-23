@@ -6,7 +6,7 @@ The `R` parameter is often described as "the environment type." That's true, but
 
 Consider two versions of the same function:
 
-```rust
+```rust,ignore
 // Version A: traditional async
 async fn process_order(order: Order) -> Result<Receipt, Error> {
     // What does this use? Read the body to find out.
@@ -37,26 +37,25 @@ This diff is in the function signature — impossible to miss. With traditional 
 
 ## Refactoring Safety
 
-When you refactor and remove a dependency, the compiler finds all the places that provided the now-unnecessary value. The `R` type shrinks, and all the callers that were providing the removed dep get a compile error saying they're providing something no longer needed.
+When you refactor and remove a dependency, the `R` type shrinks. Callers that construct a concrete environment may need to simplify that environment too.
 
-```rust
+```rust,ignore
 // After removing Logger from process_order:
 
-// This now fails to compile — .provide(my_logger) is unnecessary
-run_blocking(
-    process_order(order)
-        .provide(my_db)
-        .provide(my_logger) // ERROR: Logger is not part of R anymore
-)?;
+// Before: process_order required AppEnv { db, logger }
+let result = run_blocking(process_order(order), AppEnv { db, logger })?;
+
+// After: process_order only requires Database
+let result = run_blocking(process_order(order), db)?;
 ```
 
-The compiler guides you to clean up callers. Traditional code leaves stale dependencies silently lingering.
+The compiler guides the cleanup when the environment type changes. Traditional singleton-style code can leave stale dependencies silently lingering.
 
 ## Testing Clarity
 
 When writing a test, `R` tells you exactly what you need to mock:
 
-```rust
+```rust,ignore
 #[test]
 fn test_process_order() {
     // R = (Database, PaymentGateway, EmailService, Logger)
@@ -65,7 +64,7 @@ fn test_process_order() {
         process_order(test_order()),
         (mock_db(), mock_payment(), mock_email(), test_logger()),
     );
-    assert!(result.is_ok());
+    assert!(matches!(result, Exit::Success(_)));
 }
 ```
 
@@ -76,8 +75,8 @@ There's no "I wonder if this also touches the metrics service" uncertainty. The 
 It's important to understand that `R` is just a type parameter. The "compile-time DI" property comes from:
 
 1. Functions declaring what they need in `R`
-2. The runtime refusing to execute unless `R = ()`
-3. Composition automatically merging requirements
+2. Runners requiring an actual environment value of type `R`
+3. Composition preserving environment requirements in the resulting effect type
 
 There's no reflection, no registration, no framework. Just types.
 

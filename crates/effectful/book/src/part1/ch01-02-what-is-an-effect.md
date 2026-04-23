@@ -16,7 +16,7 @@ An `Effect` is a recipe for a computation.
 
 When you write `succeed(42)`, you're not "succeeding" at anything. You're writing down a recipe that says "when executed, produce the value 42." The 42 doesn't exist yet. No computation has happened. You just have a piece of paper with instructions on it.
 
-```rust
+```rust,ignore
 use effectful::{Effect, succeed};
 
 // This doesn't compute anything — it's a description
@@ -28,11 +28,11 @@ let recipe: Effect<i32, String, ()> = succeed(42);
 
 The computation only happens when you explicitly run it:
 
-```rust
+```rust,ignore
 use effectful::run_blocking;
 
 // NOW something happens
-let result: Result<i32, String> = run_blocking(recipe);
+let result: Result<i32, String> = run_blocking(recipe, ());
 assert_eq!(result, Ok(42));
 ```
 
@@ -40,7 +40,7 @@ assert_eq!(result, Ok(42));
 
 Because an Effect is just data — a description — you can transform it without running it.
 
-```rust
+```rust,ignore
 let recipe: Effect<i32, String, ()> = succeed(42);
 
 // Transform the description: "when executed, produce 42, then double it"
@@ -49,7 +49,7 @@ let doubled: Effect<i32, String, ()> = recipe.map(|x| x * 2);
 // Still nothing has happened! `doubled` is just a modified recipe.
 
 // Now run it
-let result = run_blocking(doubled);
+let result = run_blocking(doubled, ());
 assert_eq!(result, Ok(84));
 ```
 
@@ -59,16 +59,16 @@ The `.map()` call didn't execute anything. It took one recipe and produced a new
 
 Let's see what this looks like with actual I/O:
 
-```rust
+```rust,ignore
 use effectful::{Effect, effect, run_blocking};
 
 // This function doesn't fetch anything — it returns a DESCRIPTION
 // of how to fetch a user
 fn fetch_user(id: u64) -> Effect<User, DbError, ()> {
     effect! {
-        let conn = ~ connect_to_db();
-        let user = ~ query_user(&conn, id);
-        Ok(user)
+        let conn = bind* connect_to_db();
+        let user = bind* query_user(&conn, id);
+        user
     }
 }
 
@@ -79,10 +79,10 @@ let description = fetch_user(42);
 // No database has been touched
 
 // Only when we run it does the I/O happen
-let user = run_blocking(description)?;
+let user = run_blocking(description, ())?;
 ```
 
-That `effect!` block looks imperative — it looks like it's doing things. But it's not. It's building a description of things to do. The `~` operator means "this step depends on the previous step completing" — it's describing sequencing, not executing it.
+That `effect!` block looks imperative — it looks like it's doing things. But it's not. It's building a description of things to do. The `bind*` operator means "this step depends on the previous step completing" — it's describing sequencing, not executing it.
 
 ## The Key Insight: Separation of Concerns
 
@@ -90,15 +90,18 @@ This separation — description vs execution — is how the challenges from the 
 
 **Error handling** becomes part of the description itself. When you write:
 
-```rust
-let resilient = risky_operation.retry(Schedule::exponential(100.ms(), 3));
+```rust,ignore
+let resilient = retry(
+    || risky_operation(),
+    Schedule::exponential(Duration::from_millis(100)).compose(Schedule::recurs(3)),
+);
 ```
 
 You're not adding retry logic to running code. You're modifying the *description* to say "when executed, retry up to 3 times with exponential backoff." The retry logic is baked into the recipe.
 
 **Dependencies** become part of the type signature. When you write:
 
-```rust
+```rust,ignore
 fn get_user(id: u64) -> Effect<User, DbError, Database>
 ```
 
@@ -116,7 +119,7 @@ An `Effect<A, E, R>` carries three pieces of information in its type:
 
 We'll explore all three in the next section. For now, just notice that an Effect's type tells you everything about what it does — success, failure, and dependencies — without you having to read the implementation.
 
-```rust
+```rust,ignore
 // This type signature tells the whole story:
 fn process_payment(
     amount: Money

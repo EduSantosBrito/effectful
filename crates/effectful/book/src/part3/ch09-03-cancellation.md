@@ -1,102 +1,79 @@
 # Cancellation — Interrupting Gracefully
 
-Cancellation in async code is notoriously difficult to get right. effectful makes it explicit and cooperative.
-
-## The Model: Cooperative Cancellation
-
-Fibers aren't forcibly killed. They're *interrupted* — given a signal to stop at the next safe checkpoint. The fiber cooperates by checking for interruption at yield points.
-
-The simplest yield point is `check_interrupt`:
-
-```rust
-use effectful::check_interrupt;
-
-effect! {
-    for chunk in large_dataset.chunks(1000) {
-        ~ check_interrupt();  // yields; if interrupted, stops here
-        process_chunk(chunk);
-    }
-    "done"
-}
-```
-
-Every `~` binding is also an implicit yield point. If a fiber is interrupted while awaiting an effect, the interruption propagates to the next `~` bind.
+Cancellation is explicit and cooperative. `CancellationToken` is a shared flag; `FiberHandle::interrupt()` marks a fiber handle as interrupted.
 
 ## CancellationToken
 
-For external cancellation (e.g., from HTTP request handlers or UI cancel buttons):
+```rust,ignore
+use effectful::{CancellationToken, check_interrupt};
 
-```rust
-use effectful::CancellationToken;
-
-// Create a cancellation token
 let token = CancellationToken::new();
+let child = token.child_token();
 
-// Pass it to a long-running effect
-let effect = long_running_job().with_cancellation(&token);
-
-// Spawn it
-let handle = effect.fork();
-
-// Later, cancel from outside
+assert!(!token.is_cancelled());
 token.cancel();
-
-// The fiber will stop at the next check_interrupt
-let exit = handle.join().await;
-// exit will be Exit::Failure(Cause::Interrupt)
+assert!(child.is_cancelled());
 ```
 
-Tokens can be cloned and shared. Cancelling any clone cancels all effects sharing that token.
+Cancelling a parent token cancels child tokens. Cancelling a child does not cancel its parent.
 
-## Interrupting Directly via FiberHandle
+## Checking for Cancellation
 
-```rust
-let handle = background_work().fork();
+`check_interrupt(&token)` snapshots whether the token is cancelled.
 
-// After some timeout or external event:
-handle.interrupt();
-
-let exit = handle.join().await;
-// Cleanup (finalizers, scopes) runs before the handle resolves
-```
-
-`.interrupt()` sends the interruption signal. The fiber's finalizers (Chapter 10) still run. `.join()` waits for them to complete.
-
-## Graceful Shutdown
-
-Interruption is the mechanism for graceful shutdown. The pattern:
-
-1. Signal all top-level fibers with `.interrupt()`
-2. Wait for all handles to join (with a timeout)
-3. If any fiber doesn't stop within the timeout, escalate
-
-```rust
-let handles: Vec<FiberHandle<_, _>> = workers.iter().map(|w| w.fork()).collect();
-
-// Shutdown signal received
-for h in &handles { h.interrupt(); }
-
-// Wait with timeout
-for h in handles {
-    tokio::time::timeout(Duration::from_secs(5), h.join()).await;
+```rust,ignore
+fn process_large_dataset(token: CancellationToken) -> Effect<(), Never, ()> {
+    effect! {
+        for chunk in large_dataset.chunks(1000) {
+            let cancelled = bind* check_interrupt(&token);
+            if cancelled {
+                break;
+            }
+            process_chunk(chunk);
+        }
+    }
 }
 ```
 
-Because effect finalizers run on interruption, all resources are cleaned up as fibers stop — no manual cleanup required at the shutdown handler.
+Use `token.cancelled()` when an effect should wait until cancellation happens.
 
-## Uninterruptible Regions
-
-Some operations shouldn't be interrupted mid-way (e.g., writing to a database inside a transaction). Mark them uninterruptible:
-
-```rust
-use effectful::uninterruptible;
-
-// This block runs to completion even if interrupted
-let committed = uninterruptible(effect! {
-    ~ begin_transaction();
-    ~ insert_records();
-    ~ commit();
-});
+```rust,ignore
+let wait_for_shutdown = token.cancelled(); // Effect<(), Never, ()>
 ```
 
-The interruption is deferred until `committed` completes. Use sparingly — long uninterruptible regions delay shutdown.
+## Interrupting a FiberHandle
+
+```rust,ignore
+let handle = run_fork(&runtime, || (background_work(), ()));
+
+handle.interrupt();
+
+let result = handle.join().await;
+assert!(matches!(result, Err(Cause::Interrupt(_))));
+```
+
+`interrupt()` completes the handle with `Cause::Interrupt(id)` if it was still pending. It returns `false` if the handle had already completed.
+
+## Graceful Shutdown
+
+The basic shutdown pattern is:
+
+1. Signal shared cancellation tokens.
+2. Interrupt top-level handles that should stop.
+3. Await handles with whatever timeout policy your runtime uses.
+
+```rust,ignore
+token.cancel();
+
+for handle in &handles {
+    handle.interrupt();
+}
+
+for handle in handles {
+    let _ = handle.join().await;
+}
+```
+
+## Not Present Yet
+
+The current API does not include method-style `with_cancellation` or an `uninterruptible` helper. Keep cancellation explicit by passing `CancellationToken` to long-running effects and checking it at safe points.

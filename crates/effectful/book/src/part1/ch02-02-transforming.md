@@ -6,7 +6,7 @@ You have an effect. It produces some value. But you want a different value — o
 
 `map` transforms the success value without running any new effects:
 
-```rust
+```rust,ignore
 use effectful::{succeed, Effect};
 
 let number: Effect<i32, String, ()> = succeed(21);
@@ -18,7 +18,7 @@ None of these `.map()` calls executes anything. Each one wraps the previous desc
 
 The type of the effect changes with each `map`. The `A` parameter shifts:
 
-```rust
+```rust,ignore
 // Effect<i32, String, ()>
 //   .map(|n: i32| n.to_string())
 // → Effect<String, String, ()>
@@ -30,7 +30,7 @@ The `E` (error type) and `R` (requirements) stay the same. `.map` touches only t
 
 `map_error` transforms the failure type, leaving the success path untouched:
 
-```rust
+```rust,ignore
 use effectful::fail;
 
 #[derive(Debug)]
@@ -46,7 +46,7 @@ This is typically used at module boundaries when you need to unify error types. 
 
 It's worth repeating: neither `map` nor `map_error` runs any computation.
 
-```rust
+```rust,ignore
 let effect = succeed(42)
     .map(|n| { println!("mapping!"); n + 1 })
     .map(|n| n * 2);
@@ -54,7 +54,7 @@ let effect = succeed(42)
 // At this point: nothing has printed, nothing has computed.
 // We have a description of three steps.
 
-let result = run_blocking(effect.provide(()));
+let result = run_blocking(effect, ());
 // NOW the effect runs. "mapping!" prints once. Result is 86.
 ```
 
@@ -64,7 +64,7 @@ This is the promise of laziness: you can build pipelines of transformations with
 
 A common pattern is calling both to normalise an effect into your domain's types:
 
-```rust
+```rust,ignore
 fn fetch_user_record(id: u64) -> Effect<User, AppError, ()> {
     raw_db_fetch(id)
         .map(|row| User::from_row(row))
@@ -74,21 +74,21 @@ fn fetch_user_record(id: u64) -> Effect<User, AppError, ()> {
 
 The effect goes in with raw DB types; it comes out with domain types. The transformation chain documents the conversion at a glance.
 
-## and_then / tap (convenience)
+## and_then / and_then_discard
 
 Two more helpers are worth knowing:
 
-```rust
-// and_then: map + flatten (when your mapper returns an Option or Result)
+```rust,ignore
+// and_then: sequence two effects, keep the second result
 let validated: Effect<i32, String, ()> = succeed(42)
-    .and_then(|n| if n > 0 { Some(n) } else { None });
+    .and_then(succeed(100));
 
-// tap: inspect the success value without changing it
-let logged: Effect<i32, String, ()> = succeed(42)
-    .tap(|n| println!("value: {n}"));  // side-effect, same type flows through
+// and_then_discard: sequence two effects, keep the first result
+let kept_left: Effect<i32, String, ()> = succeed(42)
+    .and_then_discard(succeed(()));
 ```
 
-`tap` is particularly useful for debugging — add it anywhere in a chain without disrupting the types.
+Use `flat_map` when the second effect depends on the first value.
 
 ## Summary
 

@@ -1,86 +1,71 @@
 # TRef — Transactional References
 
-`TRef<T>` is the fundamental mutable cell in effectful's STM system. It wraps a value that can be read and written inside transactions.
+`TRef<T>` is the fundamental mutable cell in effectful's STM system. A `TRef` is read and written through `Stm` operations, then committed atomically with `commit` / `atomically`.
 
 ## Creating a TRef
 
-```rust
-use effectful::TRef;
+```rust,ignore
+use effectful::{TRef, commit, run_blocking};
 
-let counter: TRef<i32> = TRef::new(0);
-let balance: TRef<f64> = TRef::new(1000.0);
+let counter: TRef<i32> = run_blocking(commit(TRef::make(0)), ())?;
+let balance: TRef<f64> = run_blocking(commit(TRef::make(1000.0)), ())?;
 ```
 
-`TRef::new(value)` creates a transactional reference with an initial value. TRefs are typically created once (at startup or when initialising shared state) and then shared across fibers via `Arc`.
+`TRef::make(value)` returns `Stm<TRef<T>, ()>`, not a `TRef` directly. That keeps allocation inside the same transactional model as reads and writes.
 
 ## Transactional Operations
 
-All TRef operations return `Stm<_>` — transactional descriptions, not effects. They only work inside `stm!` (or when run through `commit`/`atomically`):
+All operations return `Stm<_, E>` descriptions. Nothing changes until the transaction is committed.
 
-```rust
-use effectful::{TRef, stm};
+```rust,ignore
+use effectful::{Stm, TRef};
 
-let counter = TRef::new(0);
+let counter: TRef<i32> = /* built with TRef::make */;
 
-// Read inside a transaction
-let read_op: Stm<i32> = counter.read_stm();
-
-// Write inside a transaction
-let write_op: Stm<()> = counter.write_stm(42);
-
-// Modify (read-write atomically)
-let modify_op: Stm<()> = counter.modify_stm(|n| n + 1);
+let read_op: Stm<i32, ()> = counter.read_stm();
+let write_op: Stm<(), ()> = counter.write_stm(42);
+let update_op: Stm<(), ()> = counter.update_stm(|n| n + 1);
+let modify_op: Stm<i32, ()> = counter.modify_stm(|n| (n, n + 1));
 ```
 
-These are descriptions. Nothing happens until they're committed.
+Use `update_stm` when you only need to write a new value. Use `modify_stm` when the transaction should return one value and store another.
 
-## Running Inside stm!
+## Composing Transactions
 
-The `stm!` macro provides do-notation for composing `Stm` operations, exactly like `effect!` does for `Effect`:
+There is currently no `stm!` macro. Compose `Stm` values with `flat_map` and `map`.
 
-```rust
-use effectful::{stm, TRef};
+```rust,ignore
+use effectful::{Stm, TRef};
 
-let counter = TRef::new(0_i32);
-let total   = TRef::new(0_i32);
+let counter: TRef<i32> = /* ... */;
+let total: TRef<i32> = /* ... */;
 
-let transaction: Stm<()> = stm! {
-    let count = ~ counter.read_stm();
-    let sum   = ~ total.read_stm();
-    ~ counter.write_stm(count + 1);
-    ~ total.write_stm(sum + count);
-    ()
-};
+let transaction: Stm<(), ()> = counter.read_stm().flat_map(move |count| {
+    let total = total.clone();
+    counter
+        .write_stm(count + 1)
+        .flat_map(move |_| total.update_stm(move |sum| sum + count))
+});
 ```
 
 ## Sharing TRefs
 
-TRefs are `Clone + Send + Sync`. Wrap in `Arc` to share across fibers:
+`TRef` is cloneable and internally shared. Wrap it in `Arc` only when your surrounding ownership model needs an `Arc`.
 
-```rust
+```rust,ignore
 use std::sync::Arc;
+use effectful::TRef;
 
-let shared: Arc<TRef<i32>> = Arc::new(TRef::new(0));
-
-// Clone for each fiber
-let clone1 = Arc::clone(&shared);
-let clone2 = Arc::clone(&shared);
-
-fiber_all(vec![
-    increment_n_times(clone1, 1000),
-    increment_n_times(clone2, 1000),
-])
-// Result: counter = 2000 (atomically, without locks)
+let shared: Arc<TRef<i32>> = Arc::new(run_blocking(commit(TRef::make(0)), ())?);
 ```
 
-## TRef vs. Mutex<T>
+## TRef vs. `Mutex<T>`
 
 | Property | TRef | Mutex |
 |----------|------|-------|
-| Composable across updates | ✓ | ✗ |
-| Deadlock-free | ✓ | ✗ |
-| Blocking read | ✗ never | ✓ blocks writers |
-| Works with I/O | ✗ | ✓ |
-| Overhead | retry cost | lock/unlock cost |
+| Composable across multiple cells | Yes | Manual lock ordering |
+| Commit is atomic | Yes | Only while locks are held |
+| Transaction body can do I/O | No | Technically yes, but risky |
+| Retry on conflict | Yes | No |
 
-Use `TRef` for short, composable state mutations. Use `Mutex` when you need to hold a lock across I/O (though ideally you redesign to avoid that).
+Use `TRef` for short, composable state mutations. Use `Mutex` for non-transactional shared state, especially when you cannot model the operation as a short pure transaction.

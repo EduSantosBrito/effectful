@@ -1,99 +1,61 @@
-# Providing Dependencies — The provide Method
+# Providing Dependencies
 
-An effect with a non-`()` `R` can't be run directly. To run it, you must satisfy its requirements. The primary tool is `.provide()`.
+An effect with a non-`()` `R` needs an environment before it can run. The current low-level API is explicit: pass the environment to the runner, or capture it with `provide_env`.
 
-## Basic provide
+## Run with an Environment
 
-```rust
-fn get_user(id: u64) -> Effect<User, DbError, Database> { ... }
+```rust,ignore
+fn get_user(id: u64) -> Effect<User, DbError, Database> { /* ... */ }
 
-let effect: Effect<User, DbError, Database> = get_user(42);
-
-// Satisfy the Database requirement
-let ready: Effect<User, DbError, ()> = effect.provide(my_database);
-
-// R is now () — we can run it
-let user = run_blocking(ready)?;
+let effect = get_user(42);
+let user = run_blocking(effect, my_database)?;
 ```
 
-`.provide(value)` takes a value of whatever type `R` needs and returns a new effect where that requirement is satisfied. When `R` becomes `()`, the effect is runnable.
+`run_blocking(effect, env)` and `run_async(effect, env)` consume both the effect and the environment.
 
-## Providing Multiple Dependencies
+## Capture an Environment
 
-If `R = (Database, Logger)`, call `.provide()` twice:
+Use `provide_env` when you want to turn `Effect<A, E, R>` into `Effect<A, E, ()>` before running or composing at the edge.
 
-```rust
-fn logged_get_user(id: u64) -> Effect<User, AppError, (Database, Logger)> { ... }
-
-let user = run_blocking(
-    logged_get_user(42)
-        .provide(my_database)
-        .provide(my_logger)
-)?;
+```rust,ignore
+let ready: Effect<User, DbError, ()> = get_user(42).provide_env(my_database);
+let user = run_blocking(ready, ())?;
 ```
 
-Order doesn't matter — each `.provide()` removes one requirement from the tuple. After both, `R = ()`.
+There is no raw `.provide(value)` / `.provide_some(value)` API in the current core effect surface.
 
-## Partial Providing with provide_some
+## ServiceContext and Layers
 
-Sometimes you want to satisfy *some* requirements now and the rest later:
+For derive-based services, effects can require `ServiceContext` and be provided with a `Layer`.
 
-```rust
-// Provides Database, still needs Logger
-let partial: Effect<User, AppError, Logger> =
-    logged_get_user(42).provide_some(my_database);
+```rust,ignore
+#[derive(Clone, Service)]
+struct Database { /* ... */ }
 
-// Later, provide the Logger
-let ready: Effect<User, AppError, ()> =
-    partial.provide(my_logger);
-```
-
-`provide_some` is useful when you're building up an effect in layers — each layer provides what it knows about.
-
-## Providing Layers (Preview)
-
-For most real applications, you don't call `.provide()` with raw values. Instead, you use *Layers* — recipes that know how to construct dependencies from other dependencies:
-
-```rust
-// The idiomatic way in real apps
-let app_effect = my_business_logic()
-    .provide_layer(app_layer);
-```
-
-Layers are covered in Chapter 6. For now, think of `.provide(value)` as the low-level primitive and Layers as the high-level pattern built on top.
-
-## Where to Call provide
-
-The rule is simple: **provide at the program edge, not inside library functions.**
-
-Library functions should stay generic over `R`:
-
-```rust
-// BAD — library function reaches in and provides its own deps
-pub fn process_order(order: Order) -> Effect<Receipt, AppError, ()> {
-    let db = Database::connect("hardcoded-url");  // where did this come from?
-    inner_process(order).provide(db)
+fn get_user(id: u64) -> Effect<User, AppError, ServiceContext> {
+    Effect::<Database, AppError, ServiceContext>::service::<Database>()
+        .flat_map(move |db| db.get_user(id))
 }
 
-// GOOD — library returns requirements in R, caller provides
-pub fn process_order(order: Order) -> Effect<Receipt, AppError, Database> {
-    inner_process(order)
-}
+let layer = Layer::succeed(Database::new());
+let user = run_blocking(get_user(42).provide(layer), ())?;
 ```
 
-The caller — `main`, a test, or a higher-level orchestrator — knows what database to use. The library function should not.
+`Effect::provide(layer)` exists for `Effect<_, _, ServiceContext>`.
 
-## Summary
+## Tagged Contexts
 
-```rust
-// Satisfy one requirement
-effect.provide(value)
+For HList-style typed contexts, construct a `Context` and pass it as `R`.
 
-// Satisfy one of several requirements
-effect.provide_some(value)
+```rust,ignore
+service_key!(pub struct DbKey);
 
-// Satisfy with a Layer (see Ch6)
-effect.provide_layer(layer)
+let env = service_env::<DbKey, _>(my_database);
+let user = run_blocking(get_user(42), env)?;
 ```
 
-All three return a new effect with a smaller (or empty) `R`. None of them execute anything — `.provide()` is still lazy.
+Use `effect.provide_head(value)` when the effect's environment is `Context<Cons<Service<K, V>, Tail>>` and you want to provide the head cell.
+
+## Program Edge Rule
+
+Provide dependencies at the program edge: `main`, request adapters, integration tests, and top-level supervisors. Library functions should return effects that honestly describe their required `R`.

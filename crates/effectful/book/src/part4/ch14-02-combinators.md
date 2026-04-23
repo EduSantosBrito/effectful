@@ -1,152 +1,94 @@
 # Schema Combinators — Describing Data Shapes
 
-A schema is a value that describes how to parse an `Unknown` into a typed result. Schemas compose: build small schemas for primitive types, then combine them into schemas for complex structures.
+A schema describes how to decode wire data into a typed value and encode it back. In the current API the full shape is `Schema<A, I, E>`: semantic value `A`, wire/intermediate value `I`, and schema marker `E`.
 
 ## Primitive Schemas
 
-```rust
-use effectful::schema::{string, integer, i64, f64, boolean, null};
+```rust,ignore
+use effectful::schema::{bool_, f64, i64, string};
 
-// Parse a string
-let name_schema = string();
-
-// Parse an integer (i64)
-let age_schema = i64();
-
-// Parse a float
-let price_schema = f64();
-
-// Parse a boolean
-let active_schema = boolean();
+let name = string::<()>(); // Schema<String, String, ()>
+let age = i64::<()>();     // Schema<i64, i64, ()>
+let price = f64::<()>();   // Schema<f64, f64, ()>
+let active = bool_::<()>(); // Schema<bool, bool, ()>
 ```
 
-Each schema has type `Schema<T>` — `string()` is a `Schema<String>`, `i64()` is a `Schema<i64>`, and so on.
+Each primitive can decode its typed wire value with `decode`, and can decode an `Unknown` with `decode_unknown`.
 
-## Struct Schemas
+## Struct-Like Schemas
 
-```rust
-use effectful::schema::struct_;
+`struct_`, `struct3`, and `struct4` decode named object fields into tuples. Use `transform` to map the tuple into a domain struct.
 
-#[derive(Debug)]
+```rust,ignore
+use effectful::schema::{ParseError, Schema, i64, string, struct_, transform};
+
+#[derive(Clone)]
 struct User {
     name: String,
-    age:  i64,
+    age: i64,
 }
 
-let user_schema = struct_!(User {
-    name: string(),
-    age:  i64(),
-});
+let tuple_schema = struct_("name", string::<()>(), "age", i64::<()>());
+
+let user_schema = transform(
+    tuple_schema,
+    |(name, age)| Ok(User { name, age }),
+    |user: User| (user.name, user.age),
+);
 ```
 
-`struct_!` maps field names to their schemas and constructs the target type. If any field is missing or has the wrong type, parsing fails with a `ParseError` that includes the field path.
+If a field is missing or has the wrong type, `decode_unknown` returns a `ParseError` with the field path.
 
-For schemas without a derive macro, use `object`:
+## Optional and Array Schemas
 
-```rust
-use effectful::schema::object;
+```rust,ignore
+use effectful::schema::{array, optional, string};
 
-let user_schema = object([
-    ("name", string().map(|s| s)),
-    ("age",  i64()),
-]).map(|(name, age)| User { name, age });
+let maybe_name = optional(string::<()>());
+let tags = array(string::<()>());
 ```
 
-## Optional Fields
+`optional(schema)` accepts `Unknown::Null` as `None`. `array(schema)` decodes each element and prefixes parse errors with the failing index.
 
-```rust
-use effectful::schema::optional;
+## Validation and Transformation
 
-struct Config {
-    host:    String,
-    port:    Option<u16>,
-    timeout: Option<Duration>,
-}
+Use free combinators, not schema methods.
 
-let config_schema = struct_!(Config {
-    host:    string(),
-    port:    optional(u16()),
-    timeout: optional(duration_ms()),
-});
+```rust,ignore
+use effectful::schema::{ParseError, filter, string, transform};
+
+let non_empty = filter(string::<()>(), |s| !s.is_empty(), "must not be empty");
+
+let email_schema = transform(
+    non_empty,
+    |s| Email::parse(s).map_err(|e| ParseError::new("", format!("invalid email: {e}"))),
+    |email: Email| email.into_string(),
+);
 ```
 
-`optional(schema)` produces `Schema<Option<T>>`. A missing field or `null` both parse as `None`.
+`filter` keeps values satisfying a predicate. `transform` performs bidirectional conversion and may fail while decoding.
 
-## Array Schemas
+## Unions
 
-```rust
-use effectful::schema::array;
+`union_` tries a primary schema, then a fallback schema. For more than two branches, use `union_chain` from `schema::extra`.
 
-// Vec of strings
-let tags_schema: Schema<Vec<String>> = array(string());
+```rust,ignore
+use effectful::schema::{Schema, Unknown, union_};
 
-// Vec of User
-let users_schema: Schema<Vec<User>> = array(user_schema);
+let primary: Schema<UserId, Unknown, ()> = user_id_from_number();
+let fallback: Schema<UserId, Unknown, ()> = user_id_from_string();
+let user_id_schema = union_(primary, fallback);
 ```
-
-`array(item_schema)` parses a JSON array where each element is validated by `item_schema`. Errors include the index: `"[2].email: expected string, got null"`.
-
-## Union Schemas
-
-```rust
-use effectful::schema::{union_, literal_string};
-
-#[derive(Debug)]
-enum Status { Active, Inactive, Pending }
-
-let status_schema = union_![
-    literal_string("active")   => Status::Active,
-    literal_string("inactive") => Status::Inactive,
-    literal_string("pending")  => Status::Pending,
-];
-```
-
-`union_!` tries each branch in order and returns the first that succeeds. Errors report all branches that failed.
-
-## Transforming Schemas
-
-Schemas are values — you can `.map` them:
-
-```rust
-// Parse a string and convert it to uppercase
-let upper_schema: Schema<String> = string().map(|s| s.to_uppercase());
-
-// Parse a string and try to convert to a domain type
-let email_schema: Schema<Email> = string().try_map(|s| {
-    Email::parse(s).map_err(ParseError::custom)
-});
-```
-
-`.map` transforms on success. `.try_map` can fail and produce a `ParseError`.
 
 ## Running a Schema
 
-```rust
-use effectful::schema::parse;
+Run schemas directly through their methods.
 
-let raw: Unknown = Unknown::from_json_str(r#"{"name":"Alice","age":30}"#)?;
+```rust,ignore
+use effectful::schema::{Unknown, i64};
 
-match parse(user_schema, raw) {
-    Ok(user)  => println!("Got: {user:?}"),
-    Err(errs) => println!("Errors: {errs}"),
-}
+let raw = Unknown::I64(30);
+let age = i64::<()>().decode_unknown(&raw)?;
 ```
 
-`parse` returns `Result<T, ParseErrors>`. `ParseErrors` accumulates all errors — not just the first — so a caller gets the complete picture of what's wrong.
-
-## Schema as a Type Contract
-
-A schema is documentation. Where you use `Schema<CreateUserRequest>`, readers know: this function requires exactly this shape of data, checked at runtime. The schema is the spec.
-
-```rust
-pub fn create_user_handler() -> impl Fn(Unknown) -> Effect<User, ApiError, Db> {
-    let schema = create_user_schema();
-    move |raw| {
-        effect! {
-            let req = parse(schema.clone(), raw)
-                .map_err(ApiError::Validation)?;
-            ~ db_create_user(req)
-        }
-    }
-}
-```
+`decode` works on the schema's typed wire value `I`. `decode_unknown` works on `Unknown` trees at I/O boundaries.

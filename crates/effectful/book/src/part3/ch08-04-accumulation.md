@@ -1,96 +1,84 @@
 # Error Accumulation — Collecting All Failures
 
-`catch` and `fold` handle errors sequentially: one effect, one error, one handler. But sometimes you need to run many operations and collect *all* their failures — not just the first.
+`effect!` and `flat_map` are fail-fast. That is correct for dependent steps, but independent validation sometimes needs to collect multiple failures.
 
-## The Fail-Fast Problem
+## Fail-Fast Behavior
 
-Sequential `effect!` short-circuits on the first failure:
-
-```rust
+```rust,ignore
 effect! {
-    let _ = ~ validate_name(&input.name);    // fails here →
-    let _ = ~ validate_email(&input.email);  // never runs
-    let _ = ~ validate_age(input.age);       // never runs
+    let name = bind* validate_name(&input.name);     // if this fails, stop
+    let email = bind* validate_email(&input.email);  // not run after name failure
+    let age = bind* validate_age(input.age);
+    User { name, email, age }
 }
 ```
 
-For form validation or batch imports, you want to report all errors to the user, not just the first one.
+Use fail-fast composition when each step depends on earlier successful values.
 
-## validate_all
+## Manual Accumulation
 
-`validate_all` runs a collection of effects and accumulates all failures:
+The current root API does not include `validate_all` or `partition` helpers. For independent validations, run them as plain `Result`-returning checks or explicitly run each effect and collect errors.
 
-```rust
-use effectful::validate_all;
+```rust,ignore
+let mut errors = Vec::new();
 
-let results = validate_all(vec![
-    validate_name(&input.name),
-    validate_email(&input.email),
-    validate_age(input.age),
-]);
-// Type: Effect<Vec<Name, Email, Age>, Vec<ValidationError>, ()>
+if let Err(error) = run_blocking(validate_name(&input.name), ()) {
+    errors.push(error);
+}
+if let Err(error) = run_blocking(validate_email(&input.email), ()) {
+    errors.push(error);
+}
+if let Err(error) = run_blocking(validate_age(input.age), ()) {
+    errors.push(error);
+}
+
+if errors.is_empty() {
+    Ok(())
+} else {
+    Err(errors)
+}
 ```
 
-If any validations fail, all errors are collected and returned as a `Vec`. If all succeed, you get all the success values.
+Keep this pattern at validation boundaries. Inside business workflows, prefer typed fail-fast effects.
 
-## partition
+## Combining Error Types
 
-`partition` runs effects and splits the results into successes and failures:
+When composing effects with different error types, use `map_error` or `flat_map_union` with `Or`.
 
-```rust
-use effectful::partition;
-
-let (successes, failures): (Vec<User>, Vec<ImportError>) =
-    run_blocking(partition(records.iter().map(import_record)))?;
-
-println!("{} imported, {} failed", successes.len(), failures.len());
-```
-
-`partition` never fails. It always returns two lists: what worked and what didn't. Useful for batch operations where partial success is acceptable.
-
-## Or: Combining Two Error Types
-
-When composing effects with different error types, `Or` avoids flattening into a single error type before you're ready:
-
-```rust
+```rust,ignore
 use effectful::Or;
 
-// Instead of converting both to AppError immediately:
 type BothErrors = Or<DbError, NetworkError>;
 
-fn combined() -> Effect<Data, BothErrors, ()> {
-    db_fetch()
-        .map_error(Or::Left)
-        .zip(network_fetch().map_error(Or::Right))
-        .map(|(a, b)| merge(a, b))
+let combined: Effect<Data, BothErrors, ()> = db_fetch()
+    .union_error::<NetworkError>()
+    .flat_map(|db| network_fetch().map_error(Or::Right).map(move |net| merge(db, net)));
+```
+
+`Or<A, B>` lets you defer flattening into an application error until a boundary.
+
+## ParseErrors
+
+`ParseErrors` is an aggregate container for schema-style validation issues.
+
+```rust,ignore
+let errors = ParseErrors::new(vec![
+    ParseError::new("name", "must not be empty"),
+    ParseError::new("email", "invalid email"),
+]);
+
+for issue in errors.issues {
+    eprintln!("{}: {}", issue.path, issue.message);
 }
 ```
 
-`Or<A, B>` is the coproduct of two error types. It defers the decision of how to combine them until you actually need to handle them.
-
-## The ParseErrors Type
-
-The Schema module (Chapter 14) uses `ParseErrors` — a structured accumulator for parsing failures with field paths:
-
-```rust
-let result: Result<User, ParseErrors> = user_schema.parse(data);
-
-if let Err(errors) = result {
-    for e in errors.iter() {
-        eprintln!("At {}: {}", e.path(), e.message());
-    }
-}
-```
-
-`ParseErrors` is specialised for schema validation, but the pattern — collect all, report all — applies whenever you validate structured input.
+Current schema combinators usually return the first `ParseError`; build `ParseErrors` yourself when your boundary wants to report multiple issues.
 
 ## When to Accumulate vs. Short-Circuit
 
 | Situation | Use |
 |-----------|-----|
-| Dependent steps (each needs previous result) | `effect!` (short-circuit) |
-| Independent validations (user input) | `validate_all` |
-| Batch operations (partial success OK) | `partition` |
-| Schema parsing | `ParseErrors` (automatic) |
-
-The choice is about what makes sense to the caller. Short-circuit is efficient; accumulation is informative. Use the one your users need.
+| Dependent steps | `effect!` / `flat_map` |
+| Independent form validation | Manual accumulation |
+| Batch import with partial success | Explicit loop collecting successes/failures |
+| Schema boundary with many field issues | `ParseErrors::new(collected)` |

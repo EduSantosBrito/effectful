@@ -1,135 +1,102 @@
 # Validation and Refinement — Constrained Types
 
-Schemas parse structure. Validation adds constraints: an age must be positive, an email must contain `@`, a price must have at most two decimal places. Refinement goes further: a validated `Email` is a different type from a raw `String`, so you can never accidentally pass an unvalidated string where an email is expected.
+Schemas parse structure. Validation adds constraints: an age must be positive, an email must contain `@`, a price must have at most two decimal places.
 
-## refine: Attach a Predicate
+## refine / filter
 
-`refine` takes a schema and a predicate. Parsing succeeds only if both the schema's parse and the predicate pass:
+`refine` and `filter` attach a predicate to an existing schema. Parsing succeeds only when the base schema succeeds and the predicate returns `true`.
 
-```rust
-use effectful::schema::{string, i64, refine};
+```rust,ignore
+use effectful::schema::{i64, refine, string, filter};
 
-// Age must be between 0 and 150
 let age_schema = refine(
-    i64(),
+    i64::<()>(),
     |n| (0..=150).contains(n),
     "age must be between 0 and 150",
 );
 
-// Non-empty string
-let non_empty = refine(
-    string(),
+let non_empty = filter(
+    string::<()>(),
     |s: &String| !s.is_empty(),
     "must not be empty",
 );
 ```
 
-If the predicate returns `false`, parsing fails with a `ParseError` containing the message you provided.
+If the predicate fails, decoding returns `ParseError::new("", message)`.
 
-## filter: Same as refine, Different Style
+## Fallible Transformation
 
-`filter` is an alias for `refine` with a closure-first signature, matching Rust iterator conventions:
+Use `transform` when conversion can fail or when the semantic type differs from the wire type.
 
-```rust
-let positive = i64().filter(|n| *n > 0, "must be positive");
-let trimmed  = string().filter(|s| s == s.trim(), "must not have leading/trailing whitespace");
+```rust,ignore
+use effectful::schema::{ParseError, string, transform};
+
+let url_schema = transform(
+    string::<()>(),
+    |s| url::Url::parse(&s).map_err(|e| ParseError::new("", format!("invalid URL: {e}"))),
+    |url: url::Url| url.to_string(),
+);
 ```
 
-Use whichever reads more naturally.
+The decode closure returns `Result<B, ParseError>`. The encode closure maps the semantic value back to the base schema's semantic type.
 
-## try_map: Fallible Transformation
+## Brand
 
-When conversion logic can fail — parsing a date, constructing a URL, validating an email — use `.try_map`:
+`Brand<A, B>` is a zero-cost nominal wrapper. Use `Brand::nominal` when the value was already validated, or `RefinedBrand` when construction should validate.
 
-```rust
-use effectful::schema::ParseError;
+```rust,ignore
+use effectful::schema::{Brand, RefinedBrand};
 
-let url_schema = string().try_map(|s| {
-    url::Url::parse(&s).map_err(|e| ParseError::custom(format!("invalid URL: {e}")))
-});
-
-let date_schema = string().try_map(|s| {
-    chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
-        .map_err(|e| ParseError::custom(format!("invalid date: {e}")))
-});
-```
-
-`.try_map` runs after the base schema succeeds. The closure returns `Result<NewType, ParseError>`.
-
-## Brand — Newtypes with Zero Cost
-
-A `Brand` is a newtype wrapper that exists only at the type level. At runtime it's transparent. At compile time it prevents mixing up bare primitives with domain values:
-
-```rust
-use effectful::schema::Brand;
-
-// Define branded types
-type UserId   = Brand<i64,    UserIdMarker>;
-type Email    = Brand<String, EmailMarker>;
-type PosPrice = Brand<f64,    PosPriceMarker>;
-
-struct UserIdMarker;
 struct EmailMarker;
-struct PosPriceMarker;
+type Email = Brand<String, EmailMarker>;
+
+let email = Brand::nominal("alice@example.com".to_string());
+
+let make_email = RefinedBrand::<String, EmailMarker>::new(|s| {
+    if s.contains('@') {
+        Ok(())
+    } else {
+        Err("invalid email".to_string())
+    }
+});
+
+let checked: Email = make_email.try_make("alice@example.com".to_string())?;
 ```
 
-Build schemas that produce branded types:
+Now APIs can demand `Email` instead of a raw `String`.
 
-```rust
-let user_id_schema: Schema<UserId> = i64()
-    .filter(|n| *n > 0, "user id must be positive")
-    .map(Brand::new);
-
-let email_schema: Schema<Email> = string()
-    .try_map(|s| {
-        if s.contains('@') {
-            Ok(Brand::new(s))
-        } else {
-            Err(ParseError::custom("invalid email"))
-        }
-    });
+```rust,ignore
+fn send_welcome(to: Email) -> Effect<(), MailError, Mailer> { /* ... */ }
 ```
 
-Now functions that need an `Email` won't compile with a bare `String`:
+## HasSchema
 
-```rust
-fn send_welcome(to: Email) -> Effect<(), MailError, Mailer> { /* … */ }
+`HasSchema` attaches a canonical schema to a type family. The trait exposes associated types for semantic value, wire value, and schema marker.
 
-// This compiles:
-send_welcome(parsed_email);
+```rust,ignore
+use effectful::schema::{HasSchema, Schema, i64};
 
-// This doesn't:
-send_welcome("alice@example.com".to_string()); // type error: expected Email, found String
-```
+struct UserIdSchema;
 
-## HasSchema — Attaching Schemas to Types
+impl HasSchema for UserIdSchema {
+    type A = i64;
+    type I = i64;
+    type E = ();
 
-When a type always has the same schema, implement `HasSchema`:
-
-```rust
-use effectful::schema::HasSchema;
-
-impl HasSchema for User {
-    fn schema() -> Schema<Self> {
-        struct_!(User {
-            id:    user_id_schema(),
-            email: email_schema(),
-            name:  non_empty_string_schema(),
-        })
+    fn schema() -> Schema<Self::A, Self::I, Self::E> {
+        i64::<()>()
     }
 }
-
-// Now parse using the impl
-let user: User = User::schema().run(raw)?;
 ```
 
-`HasSchema` types work with generic tooling (exporters, documentation generators, UI scaffolding) that needs to know a type's schema without being parameterised over it.
+Use `HasSchema` for generic tooling that needs to ask for a canonical schema without knowing how it is built.
 
 ## Summary
 
 | Tool | When to use |
 |------|-------------|
-| `refine` / `filter` | Predicate on a successfully-parsed value |
-| `try_map` | Fallible conversion after parse |
-| `Brand` | Newtypes that prevent mixing domain values |
-| `HasSchema` | Attach the canonical schema to a type |
+| `refine` / `filter` | Predicate on a parsed value |
+| `transform` | Fallible conversion or semantic/wire conversion |
+| `Brand::nominal` | Nominal wrapper after validation elsewhere |
+| `RefinedBrand` | Validating branded constructor |
+| `HasSchema` | Attach a canonical schema to a type-level provider |

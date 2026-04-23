@@ -1,59 +1,60 @@
-# The ~ Operator Explained
+# The bind* Operator Explained
 
-The `~` (tilde) is the bind operator inside `effect!`. It means: "execute this effect and give me its success value; if it fails, propagate the failure and stop."
+The `bind*` (bind-star) is the bind operator inside `effect!`. It means: "execute this effect and give me its success value; if it fails, propagate the failure and stop."
 
 ## Basic Usage
 
-```rust
+```rust,ignore
 effect! {
-    let user = ~ fetch_user(42);   // bind the result to `user`
+    let user = bind* fetch_user(42);   // bind the result to `user`
     user.name
 }
 ```
 
-`~ fetch_user(42)` desugars to a `flat_map`. The rest of the block becomes the body of the closure.
+`bind* fetch_user(42)` desugars to a `flat_map`. The rest of the block becomes the body of the closure.
 
 ## Discarding Results
 
-When you don't need the value, use `~` without a binding:
+When you don't need the value, use `bind*` without a binding:
 
-```rust
+```rust,ignore
 effect! {
-    ~ log_event("processing started");   // run for side effect, discard result
-    let result = ~ do_work();
-    ~ log_event("processing done");
+    bind* log_event("processing started");   // run for side effect, discard result
+    let result = bind* do_work();
+    bind* log_event("processing done");
     result
 }
 ```
 
-Both `~ log_event(...)` expressions run for their effects and the `()` return is discarded.
+Both `bind* log_event(...)` expressions run for their effects and the `()` return is discarded.
 
 ## Method Calls on Effects
 
-`~` works on any expression that evaluates to an `Effect`. That includes method chains:
+`bind*` works on any expression that evaluates to an `Effect`. That includes method chains:
 
-```rust
+```rust,ignore
 effect! {
-    let user = ~ fetch_user(id).map_error(AppError::Database);
-    let posts = ~ fetch_posts(user.id)
-        .map_error(AppError::Database)
-        .retry(Schedule::exponential(100.ms()).take(3));
+    let user = bind* fetch_user(id).map_error(AppError::Database);
+    let posts = bind* retry(
+        || fetch_posts(user.id).map_error(AppError::Database),
+        Schedule::exponential(Duration::from_millis(100)).compose(Schedule::recurs(3)),
+    );
     (user, posts)
 }
 ```
 
-The `~` applies to the entire expression, including any `.map_error()`, `.retry()`, etc. that follow.
+The `bind*` applies to the entire expression that follows it. For retry/repeat, use the free functions that return an `Effect`.
 
-## ~ in Conditionals and Loops
+## bind* in Conditionals and Loops
 
-You can use `~` inside `if` expressions and loops:
+You can use `bind*` inside `if` expressions and loops:
 
-```rust
+```rust,ignore
 effect! {
     let value = if condition {
-        ~ compute_a()
+        bind* compute_a()
     } else {
-        ~ compute_b()
+        bind* compute_b()
     };
     process(value)
 }
@@ -61,10 +62,10 @@ effect! {
 
 Both branches are effects; the macro handles either path.
 
-```rust
+```rust,ignore
 effect! {
     for id in user_ids {
-        ~ process_user(id);  // sequential: one at a time
+        bind* process_user(id);  // sequential: one at a time
     }
     "done"
 }
@@ -72,24 +73,24 @@ effect! {
 
 Note: this is *sequential* iteration. For concurrent processing, use `fiber_all` (Chapter 9).
 
-## What ~ Cannot Do
+## What bind* Cannot Do
 
-`~` only works *inside* an `effect!` block. Calling it outside is a compile error:
+`bind*` only works *inside* an `effect!` block. Calling it outside is a compile error:
 
-```rust
-// Does not compile — ~ is not valid here
-let x = ~ fetch_user(42);
+```rust,ignore
+// Does not compile — bind* is not valid here
+let x = bind* fetch_user(42);
 
 // Must be inside effect!
-let x = effect! { ~ fetch_user(42) };
+let x = effect! { bind* fetch_user(42) };
 ```
 
-Also, `~` cannot bind across an async closure boundary. If you're calling `from_async`, the body of the async block is separate:
+Also, `bind*` cannot bind across an async closure boundary. If you're calling `from_async`, the body of the async block is separate:
 
-```rust
+```rust,ignore
 effect! {
-    let result = ~ from_async(|_r| async move {
-        // Inside here, you're in regular Rust async — no ~
+    let result = bind* from_async(|_r| async move {
+        // Inside here, you're in regular Rust async — no bind*.
         let data = some_future().await?;
         Ok(data)
     });
@@ -97,19 +98,19 @@ effect! {
 }
 ```
 
-Use `~` outside the `async move` block; use `.await` inside it.
+Use `bind*` outside the `async move` block; use `.await` inside it.
 
 ## The Old Postfix Syntax (Deprecated)
 
-Early versions of effectful used a postfix tilde: `expr ~`. This is no longer valid. Always use the prefix form:
+Early versions of effectful used a postfix bind-star: `expr ~`. This is no longer valid. Always use the prefix form:
 
-```rust
+```rust,ignore
 // OLD — do not use
 step_a() ~;
 
 // GOOD
-~ step_a();
-let x = ~ step_b();
+bind* step_a();
+let x = bind* step_b();
 ```
 
-If you see postfix tilde in older code, update it to the prefix form.
+If you see postfix bind-star in older code, update it to the prefix form.

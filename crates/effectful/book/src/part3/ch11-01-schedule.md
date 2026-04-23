@@ -1,74 +1,65 @@
 # Schedule — The Retry/Repeat Policy Type
 
-A `Schedule` is not just a number of retries or a delay. It's a *policy* — a function that takes the current state (attempt count, elapsed time, last output) and decides whether to continue and how long to wait.
+A `Schedule` is a policy used by the free `retry` and `repeat` functions. It receives `ScheduleInput { attempt }` and either returns a `ScheduleDecision { delay }` or stops.
 
 ## The Core Concept
 
-```rust
-use effectful::Schedule;
+```rust,ignore
+use effectful::{Schedule, ScheduleInput};
 
-// A Schedule answers: "Given where we are, should we continue? And after how long?"
-// Input: attempt number, elapsed time, last result
-// Output: Continue(delay) or Done
+let mut schedule = Schedule::recurs(3);
+
+while let Some(decision) = schedule.next(ScheduleInput { attempt }) {
+    sleep(decision.delay);
+    attempt += 1;
+}
 ```
 
-This abstraction is more powerful than "retry 3 times with 1-second delay." A Schedule can:
-- Increase delay exponentially (standard backoff)
-- Cap the total time regardless of attempts
-- Stop after a maximum number of attempts
-- Adjust based on the error type or last result
-- Combine policies with `&&` and `||`
+The current schedule model tracks the attempt number. It does not inspect elapsed time, the last success value, or the last error.
 
 ## Creating Schedules
 
-```rust
-use effectful::Schedule;
+```rust,ignore
+use std::time::Duration;
+use effectful::{Schedule, ScheduleInput};
 
-// Fixed delay: always wait the same amount
+let max_three = Schedule::recurs(3);
 let fixed = Schedule::spaced(Duration::from_secs(1));
-
-// Exponential: 100ms, 200ms, 400ms, 800ms, ...
 let exponential = Schedule::exponential(Duration::from_millis(100));
-
-// Fibonacci: 100ms, 100ms, 200ms, 300ms, 500ms, 800ms, ...
-let fibonacci = Schedule::fibonacci(Duration::from_millis(100));
-
-// Forever: repeat indefinitely with no delay
-let forever = Schedule::forever();
-
-// Once: run exactly once (useful for testing)
-let once = Schedule::once();
+let until_attempt_ten = Schedule::recurs_until(Box::new(|input: &ScheduleInput| input.attempt >= 10));
+let while_first_ten = Schedule::recurs_while(Box::new(|input: &ScheduleInput| input.attempt < 10));
 ```
 
 ## Combining Schedules
 
-Schedules compose:
+Use `compose` to require both schedules to continue. The produced delay is the maximum of the two decisions.
 
-```rust
-// Retry up to 5 times
-let max_5 = Schedule::exponential(100.ms()).take(5);
+```rust,ignore
+use std::time::Duration;
+use effectful::Schedule;
 
-// But stop after 30 seconds total
-let bounded = Schedule::exponential(100.ms()).until_total_duration(Duration::from_secs(30));
+let retry_policy = Schedule::exponential(Duration::from_millis(100))
+    .compose(Schedule::recurs(5));
+```
 
-// Combine with &&: both conditions must agree to continue
-let safe = Schedule::exponential(100.ms())
-    .take(5)
-    .until_total_duration(Duration::from_secs(30));
+Use `jittered` to apply deterministic jitter to delays.
+
+```rust,ignore
+let jittered = Schedule::spaced(Duration::from_secs(1)).jittered();
 ```
 
 ## Schedule as a Value
 
-Like effects, schedules are values. You can define them once and reuse them:
+Schedules are values you pass to `retry` or `repeat`. Effects are one-shot, so these functions take factories.
 
-```rust
-const DEFAULT_RETRY: Schedule = Schedule::exponential(Duration::from_millis(100))
-    .take(5)
-    .with_jitter(Duration::from_millis(50));
+```rust,ignore
+use std::time::Duration;
+use effectful::{Effect, Schedule, retry};
 
 fn call_external_api() -> Effect<Response, ApiError, HttpClient> {
-    make_request().retry(DEFAULT_RETRY)
+    retry(
+        || make_request(),
+        Schedule::exponential(Duration::from_millis(100)).compose(Schedule::recurs(5)),
+    )
 }
 ```
-
-Jitter (random delay variation) reduces thundering-herd problems when many processes retry simultaneously. `.with_jitter(d)` adds a random delay in `[0, d)` to each wait.

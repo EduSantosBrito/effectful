@@ -1,86 +1,67 @@
-# Built-in Schedules — exponential, fibonacci, forever
+# Built-in Schedules
 
-effectful provides a library of common schedule types. This section catalogs them with typical use cases.
+effectful's current `Schedule` API is intentionally small. It covers fixed delays, exponential backoff, attempt limits, predicates, composition, and deterministic jitter.
 
-## exponential
+## recurs
 
-```rust
-Schedule::exponential(Duration::from_millis(100))
-// Delays: 100ms, 200ms, 400ms, 800ms, 1600ms, ...
+```rust,ignore
+Schedule::recurs(5)
 ```
 
-The standard backoff pattern. Each delay doubles. Use for most network retry scenarios — it backs off quickly and gives the downstream service time to recover.
-
-```rust
-// With cap: 100ms, 200ms, 400ms, 800ms, 800ms, 800ms (capped at 800ms)
-Schedule::exponential(Duration::from_millis(100))
-    .with_max_delay(Duration::from_millis(800))
-```
-
-## fibonacci
-
-```rust
-Schedule::fibonacci(Duration::from_millis(100))
-// Delays: 100ms, 100ms, 200ms, 300ms, 500ms, 800ms, 1300ms, ...
-```
-
-Fibonacci backoff grows more gradually than exponential — useful when you want more retries in the early attempts before backing off significantly.
+Allows five additional schedule steps with zero delay. Compose it with a delay schedule to cap retries or repeats.
 
 ## spaced
 
-```rust
+```rust,ignore
 Schedule::spaced(Duration::from_secs(5))
-// Delays: 5s, 5s, 5s, 5s, ... (constant)
 ```
 
-Fixed interval. Use for polling (checking status every N seconds), heartbeats, or scenarios where the delay should be predictable.
+Produces the same delay for every step. Use it for polling, heartbeats, and fixed-interval repeat loops.
 
-## forever
+## exponential
 
-```rust
-Schedule::forever()
-// No delay between repetitions; runs indefinitely
+```rust,ignore
+Schedule::exponential(Duration::from_millis(100))
+// Delays: 100ms, 200ms, 400ms, 800ms, ...
 ```
 
-Run an effect as fast as possible, forever. Use with `repeat` for continuous background jobs (e.g., metrics collection, background syncs). Almost always combined with `.take(n)` or `.until_total_duration(d)`.
+The standard retry backoff. Compose with `Schedule::recurs(n)` to cap attempts.
 
-## Limiters
-
-Limiters constrain any schedule:
-
-```rust
-// Stop after N attempts
-schedule.take(5)
-
-// Stop after N successes (for repeat)
-schedule.take_successes(3)
-
-// Stop after total elapsed time
-schedule.until_total_duration(Duration::from_secs(30))
-
-// Stop after N total elapsed retries including initial
-schedule.take_with_initial(6)  // 1 initial + 5 retries
+```rust,ignore
+let bounded = Schedule::exponential(Duration::from_millis(100))
+    .compose(Schedule::recurs(5));
 ```
 
-## Jitter
+## recurs_while / recurs_until
 
-```rust
-// Add random delay in [0, jitter_max) to each wait
-schedule.with_jitter(Duration::from_millis(50))
+```rust,ignore
+use effectful::{Schedule, ScheduleInput};
 
-// Alternatively, full jitter (random in [0, delay])
-schedule.with_full_jitter()
+let first_ten = Schedule::recurs_while(Box::new(|input: &ScheduleInput| input.attempt < 10));
+let until_ten = Schedule::recurs_until(Box::new(|input: &ScheduleInput| input.attempt >= 10));
 ```
 
-Jitter prevents retry storms. When 1000 clients all hit a failing service and all retry at the same time, they create a "thundering herd." Jitter spreads the retries out.
+These schedules decide from the attempt counter.
 
-## Combining with &&
+## compose
 
-```rust
-let bounded_exponential = Schedule::exponential(Duration::from_millis(100))
-    .take(5)
-    .with_jitter(Duration::from_millis(20))
-    .until_total_duration(Duration::from_secs(10));
+```rust,ignore
+let policy = Schedule::spaced(Duration::from_secs(1))
+    .compose(Schedule::recurs(10));
 ```
 
-The `&&` (chain) operation means "continue only if both schedules agree to continue." The first schedule that says "done" wins.
+`compose` continues only while both schedules continue. When both produce a delay, the larger delay wins.
+
+## jittered
+
+```rust,ignore
+let policy = Schedule::exponential(Duration::from_millis(100))
+    .jittered()
+    .compose(Schedule::recurs(5));
+```
+
+`jittered` currently applies deterministic jitter. It is useful for exercising jitter paths without adding random behavior to tests.
+
+## Not Present Yet
+
+The current API does not include Fibonacci schedules, max-delay caps, total-duration caps, method-style `.retry()`, or method-style `.repeat()`. Use the free `retry` / `repeat` functions with factories.

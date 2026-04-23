@@ -1,84 +1,62 @@
-# Layer Graphs — Automatic Dependency Resolution
+# Layer Graphs — Dependency Planning
 
-For small applications, manually stacking layers in the right order is fine. For larger ones with dozens of services and complex inter-dependencies, it gets tedious and error-prone. `LayerGraph` automates it.
+`LayerGraph` is a planner for named layer nodes. It does not build layers itself; it computes a topological build order from `requires` and `provides` service names.
 
 ## Declaring a Layer Graph
 
-```rust
+```rust,ignore
 use effectful::{LayerGraph, LayerNode};
 
-let graph = LayerGraph::new()
-    .add(LayerNode::new("config",  config_layer))
-    .add(LayerNode::new("db",      db_layer)
-             .requires("config"))
-    .add(LayerNode::new("cache",   cache_layer)
-             .requires("config"))
-    .add(LayerNode::new("mailer",  mailer_layer)
-             .requires("config"))
-    .add(LayerNode::new("service", service_layer)
-             .requires("db")
-             .requires("cache"))
-    .add(LayerNode::new("app",     app_layer)
-             .requires("service")
-             .requires("mailer"));
+let graph = LayerGraph::new([
+    LayerNode::new("config", std::iter::empty::<&str>(), ["config"]),
+    LayerNode::new("db", ["config"], ["db"]),
+    LayerNode::new("cache", ["config"], ["cache"]),
+    LayerNode::new("service", ["db", "cache"], ["service"]),
+]);
 ```
 
-Each `LayerNode` has a name and declares its dependencies with `.requires()`. The `LayerGraph` figures out the build order automatically.
+Each node has:
 
-## Planning and Building
+- `id`: stable unique node id
+- `requires`: service names it needs
+- `provides`: service names it supplies
 
-```rust
-// Compute the build plan (topological sort)
-let plan: LayerPlan = graph.plan()?;
+## Planning
 
-// Build according to the plan (parallelises where possible)
-let env = plan.build(()).await?;
+```rust,ignore
+let plan = graph.plan_topological()?;
+assert_eq!(plan.build_order, vec!["config", "db", "cache", "service"]);
 ```
 
-`LayerPlan` is the computed ordering. It runs independent layers concurrently and sequential layers in order. The graph in the example above would:
-1. Build `config` first
-2. Build `db`, `cache`, and `mailer` concurrently (all need `config`, none need each other)
-3. Build `service` (needs `db` + `cache`)
-4. Build `app` (needs `service` + `mailer`)
+Sibling order is deterministic but should not be used as a semantic dependency. If one layer must precede another, express that with `requires` / `provides`.
 
-## Cycle Detection
+## Planner Errors
 
-`graph.plan()` returns an error if there are circular dependencies:
+`plan_topological` can fail with:
 
-```rust
-let bad_graph = LayerGraph::new()
-    .add(LayerNode::new("a", layer_a).requires("b"))
-    .add(LayerNode::new("b", layer_b).requires("a"));  // circular!
+| Error | Meaning |
+|-------|---------|
+| `DuplicateNodeId` | Two nodes share an id |
+| `ConflictingProvider` | More than one node provides the same service name |
+| `MissingProvider` | A requirement has no provider |
+| `CycleDetected` | Dependencies contain a cycle |
 
-let err = bad_graph.plan();  // Err(LayerGraphError::Cycle { ... })
+```rust,ignore
+let bad_graph = LayerGraph::new([
+    LayerNode::new("a", ["b"], ["a"]),
+    LayerNode::new("b", ["a"], ["b"]),
+]);
+
+let err = bad_graph.plan_topological();
+assert!(matches!(err, Err(LayerPlannerError::CycleDetected { .. })));
 ```
 
-Cycles are detected at plan time, before any work begins. The error message identifies the cycle.
+Use `error.to_diagnostic()` for user-facing messages and suggestions.
 
-## Conditional Layers
+## Planning from STM
 
-Layers can be added conditionally:
+`LayerGraph::plan_topological_from_tref(&nodes_tref)` reads a `TRef<Vec<LayerNode>>` snapshot transactionally and plans from that snapshot.
 
-```rust
-let mut graph = LayerGraph::new()
-    .add(LayerNode::new("config", config_layer));
+## When to Use LayerGraph
 
-if cfg!(feature = "metrics") {
-    graph = graph.add(LayerNode::new("metrics", metrics_layer)
-        .requires("config"));
-}
-```
-
-Feature flags and environment-based configuration compose naturally with the graph API.
-
-## When to Use LayerGraph vs Stack
-
-| Situation | Prefer |
-|-----------|--------|
-| < 5 layers, clear order | `.stack()` |
-| > 5 layers, complex deps | `LayerGraph` |
-| Need cycle detection | `LayerGraph` |
-| Conditional/pluggable services | `LayerGraph` |
-| Tests with minimal deps | `.stack()` |
-
-`LayerGraph` is overkill for small programs. For anything approaching production scale, the automatic resolution and parallelism are worth it.
+Use `LayerGraph` when you need validation, diagnostics, or tool-visible dependency order. For a few layers in application code, direct layer composition is usually clearer.

@@ -12,7 +12,7 @@ Rust futures are lazy: calling an `async fn` returns a `Future`; the body runs w
 
 The contrast here is about **what your API returns**—a raw `Future` you must await immediately in the caller, versus an `Effect` value you can store, compose, and run later.
 
-```rust
+```rust,ignore
 // Returns a Future; the HTTP work runs when this future is awaited / polled
 async fn fetch_user_async(id: u64) -> Result<User, HttpError> {
     http_get(&format!("https://api.example.com/users/{id}")).await
@@ -21,7 +21,7 @@ async fn fetch_user_async(id: u64) -> Result<User, HttpError> {
 // Returns a description; I/O runs when the effect is executed with an environment
 fn fetch_user(id: u64) -> Effect<User, HttpError, HttpClient> {
     effect! {
-        let user = ~ http_get(&format!("https://api.example.com/users/{id}"));
+        let user = bind* http_get(&format!("https://api.example.com/users/{id}"));
         user
     }
 }
@@ -35,12 +35,12 @@ The point is not that `async fn` is “eager.” It is that **effects give you a
 
 Because effects are values, you can build an entire program before running any of it:
 
-```rust
+```rust,ignore
 fn load_dashboard(user_id: u64) -> Effect<DashboardPage, AppError, (Database, Cache, Logger)> {
     effect! {
-        let user    = ~ fetch_user(user_id).map_error(AppError::Db);
-        let posts   = ~ fetch_posts(user.id).map_error(AppError::Db);
-        let profile = ~ build_profile(&user, &posts).map_error(AppError::Render);
+        let user    = bind* fetch_user(user_id).map_error(AppError::Db);
+        let posts   = bind* fetch_posts(user.id).map_error(AppError::Db);
+        let profile = bind* build_profile(&user, &posts).map_error(AppError::Render);
         profile
     }
 }
@@ -52,7 +52,7 @@ let page = load_dashboard(42);
 let logged_page = page.flat_map(|p| log_view(p));
 
 // Only now does any of this execute
-run_blocking(logged_page.provide(env));
+run_blocking(logged_page, env);
 ```
 
 Every line before `run_blocking` is pure data manipulation. You're assembling a pipeline. The pipeline can be inspected, transformed, passed to other functions, stored in a struct. The laws of composition apply cleanly because there are no side-effects sneaking in.
@@ -61,25 +61,26 @@ Every line before `run_blocking` is pure data manipulation. You're assembling a 
 
 Because an effect is a description, you can wrap it with new behavior *without touching the original*:
 
-```rust
-let flaky = call_payment_api(order);
-
+```rust,ignore
 // Add exponential back-off retry — no changes to call_payment_api
-let resilient = flaky.retry(Schedule::exponential(Duration::from_millis(100), 3));
+let resilient = retry(
+    || call_payment_api(order.clone()),
+    Schedule::exponential(Duration::from_millis(100)).compose(Schedule::recurs(3)),
+);
 
-// Add a timeout on top of that — still no changes
-let bounded = resilient.timeout(Duration::from_secs(5));
+// Add more transformations around `resilient` as needed — still no changes
+let bounded = resilient.map_error(PaymentError::RetryExhausted);
 ```
 
 Compare this to the async version: to add retries to an `async fn`, you'd either modify the function body, wrap it in a helper that calls it in a loop, or reach for an external crate. The retry logic gets *tangled with the business logic*.
 
-With effects, retry is just another transformation. `retry` takes a lazy description, produces a new lazy description that runs the original up to N times. No surgery on the original required.
+With effects, retry is just another description. `retry` takes a factory for one-shot effects and a `Schedule`, then returns a new effect. No surgery on the original operation required.
 
 ## Superpower #3: Test Without Mocking the Universe
 
 Because nothing runs until you provide the environment, tests can substitute controlled implementations without rewriting a single line of production code:
 
-```rust
+```rust,ignore
 #[test]
 fn user_not_found_returns_error() {
     let test_env = TestEnv::new()
@@ -87,7 +88,7 @@ fn user_not_found_returns_error() {
 
     let result = run_test(fetch_user(99), test_env);
 
-    assert!(matches!(result, Err(HttpError::NotFound)));
+    assert!(matches!(result, Exit::Failure(Cause::Fail(HttpError::NotFound))));
 }
 ```
 
@@ -105,12 +106,12 @@ That separation is useful when the same workflow must be **reused** under differ
 
 There are exactly three places where an `Effect` executes:
 
-```rust
+```rust,ignore
 // In a binary or application entry point
-run_blocking(program.provide(env));
+run_blocking(program, env);
 
 // In an async context
-run_async(program.provide(env)).await;
+run_async(program, env).await;
 
 // In tests
 run_test(program, test_env);

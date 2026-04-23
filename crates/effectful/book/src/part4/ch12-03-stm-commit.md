@@ -1,101 +1,88 @@
 # Stm and commit — Building Transactions
 
-The `stm!` macro produces `Stm<A>` values — descriptions of transactional computations. To execute them, you use `commit` or `atomically`.
+`Stm<A, E>` describes a transactional computation. It is lazy and pure with respect to the outside world: it can read/write transactional cells, fail with `E`, or retry.
 
 ## commit: Lift Stm into Effect
 
-```rust
-use effectful::{commit, Stm, Effect};
+```rust,ignore
+use effectful::{Effect, Stm, TRef, commit, run_blocking};
 
-let transaction: Stm<i32> = stm! {
-    let a = ~ ref_a.read_stm();
-    let b = ~ ref_b.read_stm();
-    a + b
-};
+let ref_a: TRef<i32> = run_blocking(commit(TRef::make(1)), ())?;
+let ref_b: TRef<i32> = run_blocking(commit(TRef::make(2)), ())?;
 
-// Lift into Effect
-let effect: Effect<i32, Never, ()> = commit(transaction);
-
-// Now run it
-let result = run_blocking(effect)?;
-```
-
-`commit` wraps a `Stm` in an effect that, when run, executes the transaction and retries if there's a conflict. The `E` type of `commit(stm)` is `Never` unless the `Stm` can fail (see `stm::fail`).
-
-## atomically: Direct Execution
-
-```rust
-use effectful::atomically;
-
-// Run a transaction immediately in the current context
-let value: i32 = atomically(stm! {
-    ~ counter.modify_stm(|n| n + 1);
-    ~ counter.read_stm()
+let transaction: Stm<i32, ()> = ref_a.read_stm().flat_map(move |a| {
+    ref_b.read_stm().map(move |b| a + b)
 });
+
+let effect: Effect<i32, (), ()> = commit(transaction);
+let result = run_blocking(effect, ())?;
 ```
 
-`atomically` is the synchronous equivalent of `commit` + `run_blocking`. Use it when you're already outside the effect system and need a quick transactional update.
+`commit(stm)` returns `Effect<A, E, R>`. The transaction is executed when the effect runs. On commit conflicts or `Stm::retry()`, it retries.
 
-## stm::fail: Transactional Errors
+## atomically
+
+`atomically(stm)` is an alias for `commit(stm)`. It still returns an `Effect`; run it with `run_blocking`, `run_async`, or compose it with other effects.
+
+```rust,ignore
+use effectful::{atomically, run_blocking};
+
+let effect = atomically(counter.modify_stm(|n| (n + 1, n + 1)));
+let value = run_blocking(effect, ())?;
+```
+
+## Stm::fail
 
 Transactions can fail with typed errors:
 
-```rust
-use effectful::stm;
+```rust,ignore
+use effectful::{Stm, TRef};
 
-fn withdraw(account: &TRef<u64>, amount: u64) -> Stm<u64> {
-    stm! {
-        let balance = ~ account.read_stm();
+fn withdraw(account: TRef<u64>, amount: u64) -> Stm<u64, InsufficientFunds> {
+    account.read_stm().flat_map(move |balance| {
         if balance < amount {
-            ~ stm::fail(InsufficientFunds);  // abort the transaction
+            Stm::fail(InsufficientFunds)
+        } else {
+            account
+                .write_stm(balance - amount)
+                .map(move |_| balance - amount)
         }
-        ~ account.write_stm(balance - amount);
-        balance - amount
-    }
+    })
 }
-
-// commit propagates the error into E
-let effect: Effect<u64, InsufficientFunds, ()> = commit(withdraw(&account, 100));
 ```
 
-`stm::fail(e)` aborts the current transaction with error `e`. The transaction is *not* retried — it fails immediately with the given error.
+`Stm::fail(e)` aborts the current transaction immediately. `commit` propagates that `E` through the returned effect.
 
-## stm::retry: Block Until Condition
+## Stm::retry
 
-Sometimes a transaction should wait until a condition is true rather than failing:
+Sometimes a transaction should wait until a condition is true rather than fail:
 
-```rust
-// Block (retry) until the queue has items
-fn dequeue(queue: &TRef<Vec<Item>>) -> Stm<Item> {
-    stm! {
-        let items = ~ queue.read_stm();
+```rust,ignore
+use effectful::{Stm, TRef};
+
+fn dequeue(queue: TRef<Vec<Item>>) -> Stm<Item, ()> {
+    queue.read_stm().flat_map(move |items| {
         if items.is_empty() {
-            ~ stm::retry();  // block until queue changes, then retry
+            Stm::retry()
+        } else {
+            let item = items[0].clone();
+            queue.write_stm(items[1..].to_vec()).map(move |_| item)
         }
-        let item = items[0].clone();
-        ~ queue.write_stm(items[1..].to_vec());
-        item
-    }
+    })
 }
 ```
 
-`stm::retry()` doesn't mean "try again immediately." It means "block until any `TRef` I read has changed, then try again." This is how `TQueue` implements blocking dequeue without busy-waiting.
+`Stm::retry()` asks the commit loop to restart later. `TQueue::take` uses this behavior to wait while empty.
 
 ## Composing Transactions
 
-Transactions compose by sequencing `stm!` blocks:
+Transactions compose with `flat_map` and `map`.
 
-```rust
-let big_transaction: Stm<()> = stm! {
-    // Sub-transaction 1
-    let _ = ~ transfer_funds(&from, &to, amount);
-    // Sub-transaction 2
-    let _ = ~ record_audit_log(&from, &to, amount);
-    ()
-};
+```rust,ignore
+let big_transaction: Stm<(), AppError> = transfer_funds(from, to, amount)
+    .flat_map(move |_| record_audit_log(from, to, amount));
 
-// Both operations commit atomically or neither does
 let effect = commit(big_transaction);
 ```
 
-The composed transaction retries as a unit — if either sub-operation sees a conflict, the whole thing restarts from the beginning.
+The composed transaction commits as a unit. If any part fails, retries, or observes a conflict, the whole transaction does not partially commit.

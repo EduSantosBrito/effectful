@@ -1,66 +1,69 @@
 # Exit — Terminal Outcomes
 
-Every effect execution ends with an `Exit`. It's the final word on what happened.
+`Exit<A, E>` records whether an effect-like computation succeeded or failed with a structured `Cause<E>`.
 
 ## The Exit Type
 
-```rust
-use effectful::Exit;
+```rust,ignore
+use effectful::{Cause, Exit};
 
-enum Exit<E, A> {
-    Success(A),         // Effect completed, produced A
-    Failure(Cause<E>),  // Effect failed with Cause<E>
+enum Exit<A, E> {
+    Success(A),
+    Failure(Cause<E>),
 }
 ```
 
-`Exit` combines the success type and the full failure taxonomy. It's what you get when you use `run_to_exit` instead of `run_blocking`:
+The public constructors are `Exit::succeed(value)`, `Exit::fail(error)`, `Exit::die(message)`, and `Exit::interrupt(fiber_id)`.
 
-```rust
-use effectful::run_to_exit;
+## Getting an Exit
 
-// run_blocking returns Result<A, E> — loses Cause::Die and Cause::Interrupt info
-let user: Result<User, DbError> = run_blocking(get_user(1))?;
+`run_blocking(effect, env)` and `run_async(effect, env)` return `Result<A, E>`. The test harness returns `Exit<A, E>`.
 
-// run_to_exit returns Exit<E, A> — full picture
-let exit: Exit<DbError, User> = run_to_exit(get_user(1));
+```rust,ignore
+use effectful::{Exit, run_test};
+
+let exit: Exit<User, DbError> = run_test(get_user(1), env);
 
 match exit {
-    Exit::Success(user)                    => println!("Got user: {}", user.name),
+    Exit::Success(user) => println!("Got user: {}", user.name),
     Exit::Failure(Cause::Fail(DbError::NotFound)) => println!("User not found"),
-    Exit::Failure(Cause::Die(panic_val))   => eprintln!("Defect: {:?}", panic_val),
-    Exit::Failure(Cause::Interrupt)        => println!("Cancelled"),
+    Exit::Failure(Cause::Die(message)) => eprintln!("Defect: {message}"),
+    Exit::Failure(Cause::Interrupt(id)) => println!("Interrupted fiber {id:?}"),
+    Exit::Failure(Cause::Both(_, _) | Cause::Then(_, _)) => println!("Composite failure"),
 }
 ```
+
+There is no `run_to_exit` helper in the current API.
 
 ## Converting Exit to Result
 
-Most application code wants `Result`. The conversion is straightforward:
+Use `into_result()` to get `Result<A, Cause<E>>`.
 
-```rust
-let result: Result<User, AppError> = exit.into_result(|cause| match cause {
-    Cause::Fail(e) => AppError::Expected(e),
-    Cause::Die(_)  => AppError::Defect,
-    Cause::Interrupt => AppError::Cancelled,
-});
+```rust,ignore
+let result: Result<User, Cause<DbError>> = exit.into_result();
 ```
 
-Or use the convenience method that maps `Cause::Fail(e)` → `Err(e)` and treats other causes as panics:
+If you only want typed failures, pattern match on the cause.
 
-```rust
-let result: Result<User, DbError> = exit.into_result_or_panic();
+```rust,ignore
+let result: Result<User, AppError> = match exit.into_result() {
+    Ok(user) => Ok(user),
+    Err(Cause::Fail(e)) => Err(AppError::Expected(e)),
+    Err(Cause::Die(message)) => Err(AppError::Defect(message)),
+    Err(Cause::Interrupt(id)) => Err(AppError::Interrupted(id)),
+    Err(cause) => Err(AppError::Composite(cause.pretty())),
+};
 ```
 
-## Exit in Fiber Joins
+There is no `into_result_or_panic` helper in the current API.
 
-When you join a fiber (Chapter 9), you get an `Exit` back:
+## Exit in Fibers
 
-```rust
-let fiber = my_effect.fork();
-let exit: Exit<E, A> = fiber.join().await;
+`FiberHandle::await_exit()` returns `Effect<Exit<A, E>, Never, ()>`. `FiberHandle::join().await` returns `Result<A, Cause<E>>`.
+
+```rust,ignore
+let exit: Exit<A, E> = run_async(handle.await_exit(), ()).await?;
+let result: Result<A, Cause<E>> = handle.join().await;
 ```
 
-This lets you inspect whether the fiber succeeded, failed with a typed error, panicked, or was cancelled — and respond appropriately in the parent fiber.
-
-## Practical Rule
-
-Use `run_blocking` (which returns `Result<A, E>`) for 90% of cases. Use `run_to_exit` when you need to distinguish panics from typed failures — typically at top-level handlers, supervisors, or when integrating with external error reporting.
+Use `Exit` when you need to preserve all failure detail. Use `Result` when typed failures are enough.

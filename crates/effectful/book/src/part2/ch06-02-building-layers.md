@@ -1,89 +1,67 @@
 # Building Layers — From Simple to Complex
 
-## Simple Layers: One Input, One Output
+effectful currently has two layer surfaces:
 
-The simplest layer takes one service and produces another:
+- `LayerFn` / `LayerBuild` for typed HList-style values.
+- `Layer<ROut, E, RIn>` for `ServiceContext` services.
 
-```rust
-// Produces a database connection from config
-let db_layer = LayerFn::new(|config: &Tagged<ConfigKey>| {
-    effect! {
-        let pool = ~ connect_pool(config.value().db_url());
-        tagged::<DatabaseKey>(pool)
-    }
+## LayerFn
+
+`LayerFn` wraps a zero-argument function returning `Result<Output, Error>`.
+
+```rust,ignore
+use effectful::{LayerBuild, LayerFn, tagged};
+
+let config_layer = LayerFn(|| Ok(tagged::<ConfigKey, _>(Config::from_env()?)));
+let config = config_layer.build()?;
+```
+
+Use `LayerEffect::new(effect)` when the output comes from an `Effect` and should be cached after first build.
+
+```rust,ignore
+use effectful::LayerEffect;
+
+let db_layer = LayerEffect::new(connect_pool(config.db_url()).map(|pool| tagged::<DatabaseKey, _>(pool)));
+let db = db_layer.build()?;
+```
+
+## LayerFnFrom
+
+Use `LayerFnFrom` when a layer depends on the output of a previous layer.
+
+```rust,ignore
+use effectful::{LayerFn, LayerFnFrom, LayerExt};
+
+let config = LayerFn(|| Ok(Config::from_env()?));
+let db = LayerFnFrom(|config: &Config| Ok(Database::connect(config.db_url())?));
+
+let stack = config.and_then(db);
+let env = stack.build()?;
+```
+
+## ServiceContext Layers
+
+For derive-based services, use `Layer::succeed` or `Layer::effect`.
+
+```rust,ignore
+#[derive(Clone, Service)]
+struct Config { /* ... */ }
+
+let config_layer = Layer::succeed(Config::from_env());
+
+let db_layer = Layer::effect("Database", || {
+    Config::use_(|config| Database::connect(config.database_url))
 });
 ```
 
-## Layers That Need Nothing
-
-A layer that builds from scratch (no inputs) uses `Nil` or `()` as its input type:
-
-```rust
-// Config layer — reads from environment variables, needs nothing
-let config_layer = LayerFn::new(|_: &Nil| {
-    effect! {
-        let cfg = Config::from_env()?;
-        tagged::<ConfigKey>(cfg)
-    }
-});
-```
-
-## Layers With Multiple Inputs
-
-To require multiple services, the input type is a tuple of tagged values:
-
-```rust
-// Logger needs both Config and MetricsClient
-let logger_layer = LayerFn::new(
-    |env: &(Tagged<ConfigKey>, Tagged<MetricsKey>)| {
-        effect! {
-            let config  = env.0.value();
-            let metrics = env.1.value();
-            let logger  = Logger::new(config.log_level(), metrics.clone());
-            tagged::<LoggerKey>(logger)
-        }
-    }
-);
-```
-
-## Layers That Produce Multiple Values
-
-A layer can produce a context with several services at once:
-
-```rust
-// Build both primary and replica database pools
-let db_layers = LayerFn::new(|config: &Tagged<ConfigKey>| {
-    effect! {
-        let primary = ~ connect_pool(config.value().primary_url());
-        let replica = ~ connect_pool(config.value().replica_url());
-        ctx!(
-            tagged::<PrimaryDbKey>(primary),
-            tagged::<ReplicaDbKey>(replica),
-        )
-    }
-});
-```
+`Layer::effect` receives dependencies through `ServiceContext`, so it can use `Effect::service::<S>()` or `S::use_`.
 
 ## Memoization
 
-By default, `LayerFn` builds fresh on every call. If you want the same instance shared across multiple dependents, wrap with `.memoize()`:
+`Layer<ROut, E, RIn>` exposes `.memoized()`.
 
-```rust
-let shared_config = config_layer.memoize();
-// Now every layer that depends on ConfigKey gets the same instance
+```rust,ignore
+let shared_config = config_layer.memoized();
 ```
 
-Without memoization, if three layers need `ConfigKey`, `config_layer` would run three times. With `.memoize()`, it runs once and the result is cached for the lifetime of the build.
-
-## The Pattern in Practice
-
-A typical application has a handful of layers that form a pipeline:
-
-```
-config_layer (no input)
-  → db_layer (needs config)
-  → cache_layer (needs config)
-  → service_layer (needs db + cache)
-```
-
-The next section shows how to wire them together.
+`LayerEffect` in the HList surface caches by design after the first build.

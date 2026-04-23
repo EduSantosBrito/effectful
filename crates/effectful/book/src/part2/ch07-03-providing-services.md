@@ -1,89 +1,68 @@
 # Providing Services via Layers
 
-You have a trait. You have an implementation. Now you need a Layer that wires them together.
+The derive-service API makes a service type both key and value. Provide concrete services with `Layer::succeed` or construct them with `Layer::effect`.
 
-## The Minimal Service Layer
+## Minimal Service Layer
 
-```rust
-use effectful::{LayerFn, tagged, effect};
+```rust,ignore
+use effectful::{Layer, Service};
 
-// The production implementation
-struct PostgresUserRepository {
+#[derive(Clone, Service)]
+struct UserRepository {
     pool: Pool,
 }
 
-impl UserRepository for PostgresUserRepository {
-    fn get_user(&self, id: u64) -> Effect<User, DbError, ()> {
-        effect! {
-            let row = ~ query(&self.pool, "SELECT * FROM users WHERE id = $1", id);
-            User::from_row(row)
-        }
-    }
-    // ...
+let repo_layer = Layer::succeed(UserRepository { pool });
+```
+
+An effect can read the service from `ServiceContext`.
+
+```rust,ignore
+fn get_user(id: u64) -> Effect<User, AppError, ServiceContext> {
+    UserRepository::use_(move |repo| repo.get_user(id))
 }
+```
 
-// The layer that builds the implementation from the database pool
-let user_repo_layer = LayerFn::new(|env: &Tagged<DatabaseKey>| {
-    effect! {
-        let repo = PostgresUserRepository { pool: env.value().clone() };
-        tagged::<UserRepositoryTag>(Arc::new(repo) as Arc<dyn UserRepository>)
-    }
+Run by providing the layer at the edge.
+
+```rust,ignore
+let user = run_blocking(get_user(42).provide(repo_layer), ())?;
+```
+
+## Layer with Dependencies
+
+`Layer::effect` builds a service by running an effect in `ServiceContext`.
+
+```rust,ignore
+#[derive(Clone, Service)]
+struct Config { database_url: String }
+
+#[derive(Clone, Service)]
+struct Database { /* ... */ }
+
+let config_layer = Layer::succeed(Config::from_env());
+
+let db_layer = Layer::effect("Database", || {
+    Config::use_(|config| Database::connect(config.database_url))
 });
+
+let app_layer = db_layer.provide_merge(config_layer);
 ```
 
-The layer takes `Tagged<DatabaseKey>` (the database pool) and produces `Tagged<UserRepositoryTag>` (the repository wrapped as `Arc<dyn UserRepository>`).
-
-## Composition with Other Layers
-
-The repository layer needs the database. Wire them:
-
-```rust
-let app_layer = config_layer
-    .stack(db_layer)
-    .stack(user_repo_layer);  // db_layer output feeds into user_repo_layer
-```
-
-Now `app_layer` produces an environment containing `ConfigKey`, `DatabaseKey`, and `UserRepositoryTag` — everything `get_user_profile` needs.
+`provide` hides provider services in the final output. `provide_merge` keeps them.
 
 ## Test Layer with Mock
 
-```rust
-struct MockUserRepository {
-    users: HashMap<u64, User>,
+Tests provide the same service type with a fake implementation.
+
+```rust,ignore
+#[derive(Clone, Service)]
+struct UserRepository {
+    users: Arc<HashMap<u64, User>>,
 }
 
-impl UserRepository for MockUserRepository {
-    fn get_user(&self, id: u64) -> Effect<User, DbError, ()> {
-        match self.users.get(&id) {
-            Some(u) => succeed(u.clone()),
-            None    => fail(DbError::NotFound),
-        }
-    }
-    // ...
-}
-
-let test_repo_layer = LayerFn::new(|_: &Nil| {
-    let repo = MockUserRepository {
-        users: [(1, alice()), (2, bob())].into(),
-    };
-    succeed(tagged::<UserRepositoryTag>(Arc::new(repo) as Arc<dyn UserRepository>))
-});
+let test_layer = Layer::succeed(UserRepository::from_users([alice(), bob()]));
+let exit = run_test(get_user(1).provide(test_layer), ());
 ```
 
-The test layer needs nothing (no real database), produces the same `Tagged<UserRepositoryTag>`, and can be stacked in place of the production layer.
-
-## The Swap
-
-```rust
-// Production
-run_blocking(my_app().provide_layer(
-    config_layer.stack(db_layer).stack(user_repo_layer)
-));
-
-// Test
-run_test(my_app().provide_layer(
-    test_repo_layer  // no config or db needed
-));
-```
-
-The application code doesn't change. Only the layer stack changes. The type system ensures both stacks satisfy the effect's requirements.
+Application code does not change; only the layer at the edge changes.

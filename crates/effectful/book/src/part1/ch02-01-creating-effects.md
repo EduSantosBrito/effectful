@@ -6,7 +6,7 @@ Every effect starts as either a success or a failure. The two constructors that 
 
 `succeed` wraps a value into an effect that, when run, immediately produces that value:
 
-```rust
+```rust,ignore
 use effectful::{Effect, succeed};
 
 let answer: Effect<i32, String, ()> = succeed(42);
@@ -22,7 +22,7 @@ The type parameters are important:
 
 If you prefer the FP vocabulary, `pure` is an alias for `succeed`:
 
-```rust
+```rust,ignore
 use effectful::pure;
 
 let effect = pure(42_i32);
@@ -34,7 +34,7 @@ Both names refer to exactly the same thing. Use whichever feels natural in conte
 
 `fail` wraps an error into an effect that, when run, immediately fails with that error:
 
-```rust
+```rust,ignore
 use effectful::{Effect, fail};
 
 let oops: Effect<i32, String, ()> = fail("something went wrong".to_string());
@@ -48,7 +48,7 @@ The type annotation matters: `Effect<i32, String, ()>` says this would have prod
 
 For cases where you want to capture some computation in an effect (but still defer it):
 
-```rust
+```rust,ignore
 use effectful::{Effect, effect};
 
 let computed: Effect<i32, String, ()> = effect!(|_r: &mut ()| {
@@ -63,7 +63,7 @@ The body of `effect!` runs lazily — only when the effect is executed. This is 
 
 Rust's type inference often lets you skip the annotations:
 
-```rust
+```rust,ignore
 // Types inferred from usage
 let answer = succeed(42);      // Effect<i32, _, ()>
 let greeting = succeed("hi"); // Effect<&str, _, ()>
@@ -73,7 +73,7 @@ The error type `E` is usually inferred from how the effect is used later — whe
 
 ## Quick Reference
 
-```rust
+```rust,ignore
 succeed(value)    // Effect that produces value
 pure(value)       // Alias for succeed
 fail(error)       // Effect that fails with error

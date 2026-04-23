@@ -2,7 +2,7 @@
 
 Consider transferring money between two accounts. With mutexes:
 
-```rust
+```rust,ignore
 fn transfer(from: &Mutex<Account>, to: &Mutex<Account>, amount: u64) {
     let from_guard = from.lock().unwrap();
     // Thread B might be doing transfer(to, from, ...) right here
@@ -26,24 +26,22 @@ STM operates on the assumption that conflicts are rare. Instead of locking, it:
 
 If anything changed between step 1 and step 3, the transaction *retries* automatically from step 1.
 
-```rust
-use effectful::{TRef, stm, commit};
+```rust,ignore
+use effectful::{Effect, Stm, TRef, commit};
 
-fn transfer(from: &TRef<Account>, to: &TRef<Account>, amount: u64)
--> Effect<(), TransferError, ()>
-{
-    commit(stm! {
-        let from_acct = ~ from.read_stm();
-        let to_acct   = ~ to.read_stm();
-
+fn transfer(from: TRef<Account>, to: TRef<Account>, amount: u64) -> Effect<(), TransferError, ()> {
+    let transaction: Stm<(), TransferError> = from.read_stm().flat_map(move |from_acct| {
+        to.read_stm().flat_map(move |to_acct| {
         if from_acct.balance < amount {
-            ~ stm::fail(TransferError::InsufficientFunds);
+            Stm::fail(TransferError::InsufficientFunds)
+        } else {
+            from.write_stm(Account { balance: from_acct.balance - amount, ..from_acct })
+                .flat_map(move |_| to.write_stm(Account { balance: to_acct.balance + amount, ..to_acct }))
         }
+        })
+    });
 
-        ~ from.write_stm(Account { balance: from_acct.balance - amount, ..from_acct });
-        ~ to.write_stm(Account { balance: to_acct.balance + amount, ..to_acct });
-        ()
-    })
+    commit(transaction)
 }
 ```
 
@@ -56,7 +54,7 @@ No locks. No deadlock risk. The transaction retries automatically if another tra
 | Single shared value | ✓ simple | ✓ fine |
 | Multiple related values | ✗ deadlock risk | ✓ composable |
 | Read-heavy workloads | ✗ blocks writers | ✓ reads never block |
-| Composing two existing operations | ✗ requires coordination | ✓ just nest in stm! |
+| Composing two existing operations | ✗ requires coordination | ✓ compose `Stm` values |
 | Long operations with I/O | ✓ (STM would retry too much) | ✗ wrong tool |
 
 STM shines when:
@@ -64,4 +62,4 @@ STM shines when:
 - You're composing smaller transactional operations into larger ones
 - Contention is low (retries are cheap)
 
-Avoid STM for long-running operations that do I/O — transactions should be short and pure. The `stm!` macro is for read-modify-write, not for network calls.
+Avoid STM for long-running operations that do I/O. Transactions should be short and pure; use `Effect` for I/O and `Stm` for transactional state changes.

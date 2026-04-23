@@ -1,41 +1,34 @@
 # Migrating from `async fn` to effects
 
-This appendix is a practical guide for converting existing async Rust code to effectful. It covers common patterns and their effectful equivalents, with migration steps for each.
+This appendix shows the current migration shape for effectful: return `Effect`, keep dependencies in `R`, and run at the boundary with an explicit environment.
 
-## The Mental Model Shift
+## Mental Model Shift
 
-In typical async Rust, a function returns a `Future`; when that future is awaited, the work runs:
+In ordinary async Rust, calling an `async fn` creates a `Future`; awaiting it runs the work.
 
-```rust
+```rust,ignore
 async fn get_user(id: u64, db: &DbClient) -> Result<User, DbError> {
-    db.query_one("SELECT * FROM users WHERE id = $1", &[&id]).await
+    db.query_one(id).await
 }
 ```
 
-In effectful, many domain functions return an **`Effect`**—a description you run later with an environment:
+In effectful, a function returns an `Effect` description. The runner receives the environment later.
 
-```rust
-fn get_user<A, E, R>(id: u64) -> Effect<A, E, R>
-where
-    A: From<User> + 'static,
-    E: From<DbError> + 'static,
-    R: NeedsDb + 'static,
-{
-    effect!(|r: &mut R| {
-        let db = ~ DbKey;
-        let user = ~ db.get_user(id);
-        A::from(user)
+```rust,ignore
+fn get_user(id: u64) -> Effect<User, DbError, DbClient> {
+    effect!(|db: &mut DbClient| {
+        bind* db.query_one(id)
     })
 }
+
+let user = run_blocking(get_user(42), db_client)?;
 ```
 
-The database client is no longer a function parameter. It's declared in `R` and retrieved by the runtime. The business logic is identical; what changes is how dependencies are supplied.
-
-## Pattern 1: async fn → fn returning Effect
+## Pattern 1: async fn to Effect
 
 **Before**
 
-```rust
+```rust,ignore
 pub async fn process_order(
     order_id: OrderId,
     db: &DbClient,
@@ -50,193 +43,134 @@ pub async fn process_order(
 
 **After**
 
-```rust
-pub fn process_order<A, E, R>(order_id: OrderId) -> Effect<A, E, R>
-where
-    A: From<Receipt> + 'static,
-    E: From<AppError> + 'static,
-    R: NeedsDb + NeedsMailer + 'static,
-{
-    effect!(|r: &mut R| {
-        let db     = ~ DbKey;
-        let mailer = ~ MailerKey;
-        let order   = ~ db.get_order(order_id);
-        let receipt = ~ db.complete_order(order);
-        ~ mailer.send_receipt(&receipt);
-        A::from(receipt)
+```rust,ignore
+#[derive(Clone)]
+struct AppEnv {
+    db: DbClient,
+    mailer: MailClient,
+}
+
+pub fn process_order(order_id: OrderId) -> Effect<Receipt, AppError, AppEnv> {
+    effect!(|env: &mut AppEnv| {
+        let order = bind* env.db.get_order(order_id).map_error(AppError::Db);
+        let receipt = bind* env.db.complete_order(order).map_error(AppError::Db);
+        bind* env.mailer.send_receipt(&receipt).map_error(AppError::Mail);
+        receipt
     })
 }
 ```
 
-**Migration steps:**
+Migration steps:
 
-1. Remove the dependency parameters (`db`, `mailer`)
-2. Add `<A, E, R>` generic parameters
-3. Add `where` bounds for each removed dependency
-4. Replace `async move { … }` with `effect!(|r: &mut R| { … })`
-5. Replace `.await?` with `~ ` prefix
-6. Wrap the return value with `A::from(…)`
+1. Change `async fn` to `fn` returning `Effect<A, E, R>`.
+2. Move dependencies into an environment type or service context.
+3. Replace `.await?` on effectful operations with `bind*`.
+4. Return the success value as the block tail.
+5. Call `run_blocking(effect, env)` or `run_async(effect, env)` at the boundary.
 
 ## Pattern 2: Wrapping Third-Party Async
 
-Third-party libraries return `Future`s, not `Effect`s. Use `from_async` to wrap them:
+Third-party libraries return futures, not effects. Wrap them with `from_async`.
 
-**Before**
-
-```rust
-async fn fetch_price(symbol: &str) -> Result<f64, reqwest::Error> {
-    reqwest::get(format!("https://api.example.com/price/{symbol}"))
-        .await?
-        .json::<PriceResponse>()
-        .await
-        .map(|r| r.price)
-}
-```
-
-**After**
-
-```rust
-fn fetch_price<A, E, R>(symbol: String) -> Effect<A, E, R>
-where
-    A: From<f64> + 'static,
-    E: From<reqwest::Error> + 'static,
-    R: 'static,
-{
-    from_async(move |_r| async move {
-        let price = reqwest::get(format!("https://api.example.com/price/{symbol}"))
-            .await?
-            .json::<PriceResponse>()
-            .await
-            .map(|r| r.price)?;
-        Ok(A::from(price))
+```rust,ignore
+fn fetch_price(symbol: String) -> Effect<f64, reqwest::Error, ()> {
+    from_async(move |_r: &mut ()| async move {
+        let response = reqwest::get(format!("https://api.example.com/price/{symbol}"))
+            .await?;
+        let body = response.json::<PriceResponse>().await?;
+        Ok(body.price)
     })
 }
 ```
 
-The `from_async` closure still uses `.await` internally. Only the outermost function signature changes.
+Inside the async closure, use normal `.await`. Outside, compose the result as an `Effect`.
 
 ## Pattern 3: Error Types
 
-**Before** — single monolithic error enum
+Map infrastructure errors into your application error at composition points.
 
-```rust
+```rust,ignore
 #[derive(Debug)]
 enum AppError {
-    DbError(DbError),
-    MailError(MailError),
-    NotFound(String),
+    Db(DbError),
+    Mail(MailError),
 }
+
+let effect = db_call().map_error(AppError::Db);
 ```
 
-**After** — effects propagate errors through `From` bounds
+Use `catch` to recover with another effect, and `catch_all` to turn typed errors into fallback success values.
 
-```rust
-// Keep domain errors as-is
-#[derive(Debug)] struct NotFoundError(String);
+## Pattern 4: Services
 
-// Effect signatures declare what they can fail with:
-fn get_user<A, E, R>(id: u64) -> Effect<A, E, R>
-where
-    E: From<DbError> + From<NotFoundError> + 'static, // …
-```
+For application dependency injection, prefer `#[derive(Service)]` plus `ServiceContext`.
 
-You still need an `AppError` at the top level (in `main` or your HTTP handler), but individual functions no longer need to know about unrelated error variants.
-
-## Pattern 4: Shared State
-
-**Before** — `Arc<Mutex<T>>` passed through function calls
-
-```rust
-async fn handler(state: Arc<Mutex<AppState>>) -> Response {
-    let mut s = state.lock().unwrap();
-    s.request_count += 1;
-    // …
+```rust,ignore
+#[derive(Clone, Service)]
+struct AppState {
+    request_count: Arc<AtomicU64>,
 }
-```
 
-**After** — shared state in a service, accessed via `R`
-
-```rust
-service_key!(AppStateKey: Arc<Mutex<AppState>>);
-
-fn handler<A, E, R>() -> Effect<A, E, R>
-where
-    R: NeedsAppState + 'static,
-    // …
-{
-    effect!(|r: &mut R| {
-        let state = ~ AppStateKey;
-        let mut s = state.lock().unwrap();
-        s.request_count += 1;
-        // …
+fn handler() -> Effect<Response, AppError, ServiceContext> {
+    AppState::use_sync(|state| {
+        state.request_count.fetch_add(1, Ordering::Relaxed);
+        Response::ok()
     })
 }
+
+let env = AppState::new().to_context();
+let response = run_blocking(handler(), env)?;
 ```
 
-Or, for mutable state that needs transactional semantics across fibers, use `TRef`:
+For tagged HList contexts, use `service_key!(pub struct Key);`, `service_env::<Key, _>(value)`, and `Context::get::<Key>()`.
 
-```rust
-// Replace Arc<Mutex<Counter>> with TRef<u64>
-service_key!(CounterKey: TRef<u64>);
+## Pattern 5: Transactional State
 
-fn increment_counter<E, R>() -> Effect<u64, E, R>
-where
-    R: NeedsCounter + 'static,
-    E: 'static,
-{
-    effect!(|r: &mut R| {
-        let counter = ~ CounterKey;
-        ~ commit(counter.modify_stm(|n| n + 1));
-        ~ commit(counter.read_stm())
-    })
+Use `TRef` when state updates must compose transactionally.
+
+```rust,ignore
+let counter = run_blocking(commit(TRef::make(0_u64)), ())?;
+
+fn increment(counter: TRef<u64>) -> Effect<u64, (), ()> {
+    effect! {
+        bind* commit(counter.update_stm(|n| n + 1));
+        bind* commit(counter.read_stm())
+    }
 }
 ```
 
-## Pattern 5: Resource Cleanup
+There is no `stm!` macro in the current API; compose transactions with `flat_map`, `map`, and helpers like `update_stm`.
 
-**Before** — manual `drop` or relying on `Drop` impls
+## Pattern 6: Resource Cleanup
 
-```rust
-async fn with_connection<F, T>(pool: &Pool, f: F) -> Result<T, DbError>
-where F: AsyncFnOnce(&Connection) -> Result<T, DbError>
-{
-    let conn = pool.get().await?;
-    let result = f(&conn).await;
-    // conn is dropped here — relies on Drop
-    result
-}
-```
+Use `Scope` when cleanup must run at an explicit lifetime boundary.
 
-**After** — explicit `Scope`
-
-```rust
-fn with_connection<A, E, R, F>(f: F) -> Effect<A, E, R>
+```rust,ignore
+fn with_connection<A, E, F>(pool: Pool<Connection, DbError>, f: F) -> Effect<A, E, ()>
 where
-    F: FnOnce(&Connection) -> Effect<A, E, R> + 'static,
-    R: NeedsPool + 'static,
-    E: From<DbError> + 'static,
+    F: FnOnce(Connection) -> Effect<A, E, ()> + 'static,
     A: 'static,
+    E: From<DbError> + 'static,
 {
-    effect!(|r: &mut R| {
-        let pool = ~ PoolKey;
-        ~ scope.acquire(
-            pool.get(),           // acquire
-            |conn| pool.release(conn),  // release (always runs)
-            |conn| f(conn),       // use
-        )
+    scope_with(move |scope| {
+        effect! {
+            let conn = bind* pool.get().provide_env(scope.clone()).map_error(E::from);
+            let close_conn = conn.clone();
+            scope.add_finalizer(Box::new(move |_| close_conn.close()));
+            bind* f(conn)
+        }
     })
 }
 ```
 
-The `Scope` finalizer runs whether the inner effect succeeds, fails, or is cancelled. `Drop` doesn't give you that guarantee for async code.
+For pooled resources, `Pool::get()` registers return-to-pool cleanup on the provided `Scope`.
 
 ## Migration Strategy
 
-Migrate gradually, one module at a time:
+1. Convert leaf async wrappers first with `from_async`.
+2. Introduce explicit environment structs or `ServiceContext`.
+3. Move `run_blocking` / `run_async` to program edges.
+4. Convert tests to pass test environments or test layers.
+5. Replace stale helper assumptions with current names: `run_collect`, `run_fold`, `retry(|| ..., schedule)`, `TRef::make`, `run_test(effect, env)`.
 
-1. Start with leaf functions (those with no effectful dependencies yet) — convert them first.
-2. Move up the call graph. Functions that call converted leaf functions become easy to convert.
-3. Push the `run_blocking` call to `main` or the request handler entry point.
-4. Convert tests last — once business logic is effect-based, tests become simple layer swaps.
-
-You can mix old-style async functions and effect functions during the transition: wrap async functions with `from_async` and call effect functions with `run_blocking` in async contexts when needed.
+You can mix old async code with effects during migration. Wrap async futures at the edge and keep new domain workflows as `Effect` values.

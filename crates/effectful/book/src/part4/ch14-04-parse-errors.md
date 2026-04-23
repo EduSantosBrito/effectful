@@ -1,148 +1,118 @@
-# ParseErrors — Structured Error Accumulation
+# ParseErrors — Structured Parse Failures
 
-When a user submits a form with five invalid fields, they deserve to know about all five — not just the first one you found. `ParseErrors` is effectful's solution: errors accumulate across an entire parse, and you report them all at once.
+`ParseError` represents one schema decoding failure. `ParseErrors` is a small aggregate wrapper used when APIs want to return more than one issue.
 
 ## ParseError vs ParseErrors
 
-```rust
+```rust,ignore
 use effectful::schema::{ParseError, ParseErrors};
 
-// One error
-let e: ParseError = ParseError::custom("age must be positive");
-
-// Many errors
-let es: ParseErrors = ParseErrors::single(e);
+let e = ParseError::new("age", "age must be positive");
+let one = ParseErrors::one(e.clone());
+let many = ParseErrors::new(vec![e]);
 ```
 
-`ParseError` is a single failure. `ParseErrors` is a non-empty collection of failures with path information.
+`ParseError` has two public fields: `path` and `message`.
 
-## What a ParseError Contains
-
-```rust
-// A parse error has:
-// - a message
-// - a path (where in the data structure it occurred)
-// - optionally, the value that failed
-
-let err = ParseError::builder()
-    .message("expected integer, got string")
-    .path(["users", "0", "age"])
-    .received(Unknown::string("thirty"))
-    .build();
-
-println!("{err}");
-// → users[0].age: expected integer, got string (received: "thirty")
+```rust,ignore
+let err = ParseError::new("users.0.age", "expected i64");
+assert_eq!(err.path, "users.0.age");
+assert_eq!(err.message, "expected i64");
 ```
 
 ## Path Tracking
 
-Paths are built automatically as schemas descend into nested structures. You don't need to set them manually:
+Schema combinators prefix paths as they decode nested data.
 
-```rust
-let raw = Unknown::from_json_str(r#"
-  {
-    "users": [
-      { "name": "Alice", "age": 30 },
-      { "name": "Bob",   "age": "thirty" }
-    ]
-  }
-"#)?;
+```rust,ignore
+use effectful::schema::{Unknown, array, i64};
 
-let result = parse(users_schema, raw);
-// Err(ParseErrors {
-//   errors: [
-//     ParseError { path: "users[1].age", message: "expected integer" }
-//   ]
-// })
+let schema = array(i64::<()>());
+let raw = Unknown::Array(vec![Unknown::I64(1), Unknown::String("oops".to_string())]);
+
+let err = schema.decode_unknown(&raw).unwrap_err();
+assert_eq!(err.path, "1");
 ```
 
-The `struct_!` macro and `array` combinator push path segments automatically. Custom schemas using `.try_map` or `.filter` inherit the current path.
+`struct_`, `struct3`, and `struct4` prefix field names. `array` prefixes element indexes.
 
-## Accumulation
+## Accumulation Status
 
-The key property of `ParseErrors` is accumulation. When parsing a struct with multiple fields, failures from different fields are collected, not short-circuited:
+The current schema decoders generally short-circuit on the first failure. `ParseErrors` exists as the aggregate type for boundaries or custom validators that collect multiple `ParseError` values themselves.
 
-```rust
-let raw = Unknown::from_json_str(r#"
-  { "name": "", "age": -5, "email": "not-an-email" }
-"#)?;
+```rust,ignore
+fn validate_user(raw: &Unknown) -> Result<User, ParseErrors> {
+    let mut issues = Vec::new();
 
-let result: Result<User, ParseErrors> = parse(user_schema, raw);
-// Err(ParseErrors {
-//   errors: [
-//     ParseError { path: "name",  message: "must not be empty" },
-//     ParseError { path: "age",   message: "age must be between 0 and 150" },
-//     ParseError { path: "email", message: "invalid email" },
-//   ]
-// })
+    if let Err(err) = name_schema().decode_unknown(raw) {
+        issues.push(err);
+    }
+    if let Err(err) = age_schema().decode_unknown(raw) {
+        issues.push(err);
+    }
+
+    if issues.is_empty() {
+        build_user(raw).map_err(ParseErrors::one)
+    } else {
+        Err(ParseErrors::new(issues))
+    }
+}
 ```
 
-All three errors reported in one call. No round-trips.
+## API Boundary Conversion
 
-## Using ParseErrors at API Boundaries
+Convert parse issues into your API error type at the boundary.
 
-Convert `ParseErrors` to your API's error type:
-
-```rust
+```rust,ignore
 #[derive(Debug)]
 enum ApiError {
     Validation(Vec<FieldError>),
-    Internal(String),
 }
 
 #[derive(Debug)]
 struct FieldError {
-    field:   String,
+    field: String,
     message: String,
 }
 
 fn to_api_errors(errs: ParseErrors) -> ApiError {
     ApiError::Validation(
-        errs.into_iter()
-            .map(|e| FieldError {
-                field:   e.path().to_string(),
-                message: e.message().to_string(),
-            })
-            .collect()
+        errs.issues
+            .into_iter()
+            .map(|e| FieldError { field: e.path, message: e.message })
+            .collect(),
     )
 }
 ```
 
-## ParseErrors in Effects
+## Parse Errors in Effects
 
-`parse` returns a plain `Result`. To lift into an `Effect`:
+Schema decoding returns `Result`. Lift it into an `Effect` by mapping the error into your effect error channel.
 
-```rust
+```rust,ignore
 effect! {
-    let raw = Unknown::from_json_bytes(&body)
-        .map_err(ApiError::InvalidJson)?;
+    let req = create_user_schema()
+        .decode_unknown(&raw)
+        .map_err(|err| ApiError::Validation(ParseErrors::one(err)))?;
 
-    let req = parse(create_user_schema(), raw)
-        .map_err(to_api_errors)?;
-
-    ~ create_user(req)
+    bind* create_user(req)
 }
 ```
 
-The `?` operator on a `Result<T, ParseErrors>` inside `effect!` maps the error into `E` via `From`. Define `impl From<ParseErrors> for YourError` to make this ergonomic.
+## Display
 
-## Displaying ParseErrors
+`ParseErrors` implements `Display` by printing each issue on its own line. Empty paths omit the `path: ` prefix.
 
-`ParseErrors` implements `Display` with a human-readable multiline format:
-
+```text
+name: must not be empty
+age: age must be positive
 ```
-Validation failed (3 errors):
-  name: must not be empty
-  age: age must be between 0 and 150
-  email: invalid email
-```
-
-And `Debug` for the raw structure when inspecting in tests.
 
 ## Summary
 
-- `ParseError` = one failure with a message and a path
-- `ParseErrors` = all failures from a complete parse attempt
-- Paths are tracked automatically by schema combinators
-- Accumulation means the user sees all problems at once
-- Convert to your API error type at the boundary; keep the path information
+| Type | Meaning |
+|------|---------|
+| `ParseError` | One failure with `path` and `message` |
+| `ParseErrors` | Aggregate `{ issues: Vec<ParseError> }` |
+| `ParseErrors::one(err)` | Build a single-issue aggregate |
+| `ParseErrors::new(vec)` | Build an aggregate from collected issues |

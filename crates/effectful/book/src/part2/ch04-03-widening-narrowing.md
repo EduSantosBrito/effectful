@@ -1,12 +1,12 @@
 # Widening and Narrowing — Environment Transformations
 
-Sometimes your effect needs *part* of an environment, but you have the whole thing. Or you need to thread an effect through a context that provides more than required. This is where `zoom_env` and `contramap_env` come in.
+Sometimes your effect needs *part* of an environment, but the caller has the whole thing. This is where `zoom_env` comes in.
 
 ## The Mismatch Problem
 
 Imagine your application has a large environment type:
 
-```rust
+```rust,ignore
 struct AppEnv {
     db: Database,
     logger: Logger,
@@ -17,7 +17,7 @@ struct AppEnv {
 
 You have a utility function that only needs a `Logger`:
 
-```rust
+```rust,ignore
 fn log_event(msg: &str) -> Effect<(), LogError, Logger> { ... }
 ```
 
@@ -27,45 +27,45 @@ You can't call this inside an `effect!` block that has `AppEnv` in scope — the
 
 `zoom_env` adapts an effect to work with a *larger* environment by providing a lens from the larger type to the smaller one:
 
-```rust
-// Adapt log_event to work with AppEnv
-let app_log = log_event("hello").zoom_env(|env: &AppEnv| &env.logger);
+```rust,ignore
+// Adapt log_event to work with AppEnv.
+// The projection returns the smaller environment by value.
+let app_log = log_event("hello").zoom_env(|env: &mut AppEnv| env.logger.clone());
 ```
 
 Now `app_log` has type `Effect<(), LogError, AppEnv>`. The function extracts the `Logger` from `AppEnv` and feeds it to the original effect.
 
 Inside `effect!`, the pattern looks like:
 
-```rust
+```rust,ignore
 fn process(data: Data) -> Effect<(), AppError, AppEnv> {
     effect! {
-        ~ log_event("start").zoom_env(|e: &AppEnv| &e.logger).map_error(AppError::Log);
-        ~ db_query(data).zoom_env(|e: &AppEnv| &e.db).map_error(AppError::Db);
-        Ok(())
+        bind* log_event("start").zoom_env(|e: &mut AppEnv| e.logger.clone()).map_error(AppError::Log);
+        bind* db_query(data).zoom_env(|e: &mut AppEnv| e.db.clone()).map_error(AppError::Db);
     }
 }
 ```
 
-## contramap_env: Transform the Environment
+## Transforming the Environment
 
-While `zoom_env` narrows, `contramap_env` transforms. It applies a function to convert whatever environment the caller provides into what the effect actually needs:
+The current API uses `zoom_env` for both narrowing and transformation. It applies a function to convert the caller's environment into what the effect needs:
 
-```rust
+```rust,ignore
 // Effect needs a raw string URL
-fn connect(url: &str) -> Effect<Database, DbError, String> { ... }
+fn connect_raw() -> Effect<Database, DbError, String> { ... }
 
 // You have a Config that contains the URL
-let with_config = connect_raw.contramap_env(|cfg: &Config| cfg.db_url.clone());
+let with_config = connect_raw().zoom_env(|cfg: &mut Config| cfg.db_url.clone());
 // Now type is Effect<Database, DbError, Config>
 ```
 
-`contramap_env` is the formal name for "adapt the environment type." In practice, most code uses `zoom_env` for the common case of extracting a field.
+There is no separate `contramap_env` method in the current API.
 
 ## R as Documentation Revisited
 
 These combinators highlight why `R` is valuable as documentation. When you see:
 
-```rust
+```rust,ignore
 fn log_event(msg: &str) -> Effect<(), LogError, Logger>
 ```
 
@@ -73,7 +73,7 @@ You know *exactly* what this function needs. You don't need to read its body to 
 
 Compare to the pre-effect alternative:
 
-```rust
+```rust,ignore
 // Traditional: you'd need to read the body to know what `env` is used for
 fn log_event(env: &AppEnv, msg: &str) -> Result<(), LogError> { ... }
 ```
@@ -82,6 +82,6 @@ With `R`, the function declares what it needs. With `zoom_env`, the caller decla
 
 ## When to Use These
 
-In practice, `zoom_env` and `contramap_env` appear most often in *library code* — when writing reusable utilities that should work with any environment containing the right piece. Application code typically uses Layers and service tags (Chapters 5–6) which avoid the need for explicit projection.
+In practice, `zoom_env` appears most often in library code — when writing reusable utilities that should work with any environment containing the right piece. Application code often uses `ServiceContext`, `Context`, and Layers instead.
 
 Think of `zoom_env` as the manual fallback when the automatic layer-based wiring isn't the right fit.

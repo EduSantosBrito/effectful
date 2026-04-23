@@ -4,7 +4,7 @@
 
 ## Expected vs. Unexpected
 
-```rust
+```rust,ignore
 // Expected: you planned for this
 Effect<User, UserNotFound, Db>
 
@@ -20,7 +20,7 @@ Traditional Rust handles unexpected failures through panics, which unwind (or ab
 
 `Cause<E>` is effectful's complete taxonomy of failure:
 
-```rust
+```rust,ignore
 use effectful::Cause;
 
 enum Cause<E> {
@@ -42,7 +42,7 @@ Without `Cause`, you can only handle `Cause::Fail`. The other two propagate invi
 
 With `Cause`, you can handle *all* failure modes in a structured way:
 
-```rust
+```rust,ignore
 my_effect.catch_all(|cause| match cause {
     Cause::Fail(e)    => recover_from_expected(e),
     Cause::Die(panic) => log_defect_and_fail(panic),
