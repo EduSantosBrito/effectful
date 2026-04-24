@@ -1,0 +1,15 @@
+error[E0277]: `NotDebug` doesn't implement `std::fmt::Debug`
+ --> tests/ui/span_non_debug_arg.rs:5:1
+  |
+5 | #[span]
+  | ^^^^^^^ `NotDebug` cannot be formatted using `{:?}` because it doesn't implement `std::fmt::Debug`
+  |
+  = help: the trait `std::fmt::Debug` is not implemented for `NotDebug`
+  = note: add `#[derive(Debug)]` to `NotDebug` or manually `impl std::fmt::Debug for NotDebug`
+  = note: required for `&NotDebug` to implement `std::fmt::Debug`
+  = note: this error originates in the macro `$crate::__export::format_args` which comes from the expansion of the attribute macro `span` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider annotating `NotDebug` with `#[derive(Debug)]`
+  |
+3 + #[derive(Debug)]
+4 | struct NotDebug;
+  |

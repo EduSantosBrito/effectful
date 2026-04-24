@@ -6,7 +6,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Attribute, DeriveInput, LitStr};
+use syn::{Attribute, DeriveInput, LitStr, parse_macro_input};
 
 /// Extract the service name from `#[service(name = "...")]` attributes.
 fn extract_service_name(attrs: &[Attribute], struct_name: &str) -> String {

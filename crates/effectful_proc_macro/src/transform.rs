@@ -1426,7 +1426,10 @@ mod tests {
 
       #[test]
       fn does_not_include_following_comma_or_args() {
-        assert_ts_eq!(operand_after_bind_star_prefix(quote! { bind* a , b }), quote! { a });
+        assert_ts_eq!(
+          operand_after_bind_star_prefix(quote! { bind* a , b }),
+          quote! { a }
+        );
       }
     }
 

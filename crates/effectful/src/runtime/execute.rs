@@ -28,18 +28,17 @@ where
 {
   let waker = std::task::Waker::noop();
   let mut cx = std::task::Context::from_waker(waker);
-  let mut fut: BoxFuture<'_, Result<A, E>> =
-    match start_effect(effect, &mut env) {
-      SyncStep::Ready(output) => return output,
-      SyncStep::AsyncBorrow(f) => start_async_operation(f, &mut env),
-      SyncStep::AsyncStatic(fut) => fut,
-      SyncStep::AsyncPoll(mut poller) => loop {
-        match poller(&mut env, &mut cx) {
-          std::task::Poll::Ready(output) => return output,
-          std::task::Poll::Pending => std::thread::yield_now(),
-        }
-      },
-    };
+  let mut fut: BoxFuture<'_, Result<A, E>> = match start_effect(effect, &mut env) {
+    SyncStep::Ready(output) => return output,
+    SyncStep::AsyncBorrow(f) => start_async_operation(f, &mut env),
+    SyncStep::AsyncStatic(fut) => fut,
+    SyncStep::AsyncPoll(mut poller) => loop {
+      match poller(&mut env, &mut cx) {
+        std::task::Poll::Ready(output) => return output,
+        std::task::Poll::Pending => std::thread::yield_now(),
+      }
+    },
+  };
   loop {
     match fut.as_mut().poll(&mut cx) {
       std::task::Poll::Ready(output) => return output,
@@ -126,46 +125,57 @@ mod tests {
 
 #[cfg(test)]
 mod yield_tests {
-    use super::*;
-    use crate::kernel::{Effect, from_async};
-    use std::time::Instant;
+  use super::*;
+  use crate::kernel::{Effect, from_async};
+  use std::time::Instant;
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn yield_effect_actually_suspends() {
-        let eff = from_async(|_r| async move {
-            tokio::task::yield_now().await;
-            Ok::<(), ()>(())
-        }).map(|_| 42);
-        
-        let start = Instant::now();
-        let result = run_async(eff, ()).await.unwrap();
-        let elapsed = start.elapsed();
-        
-        assert_eq!(result, 42);
-        assert!(elapsed.as_micros() > 1, "Should have taken more than 1us due to yield, took {:?}", elapsed);
-    }
+  #[tokio::test(flavor = "current_thread")]
+  async fn yield_effect_actually_suspends() {
+    let eff = from_async(|_r| async move {
+      tokio::task::yield_now().await;
+      Ok::<(), ()>(())
+    })
+    .map(|_| 42);
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn flat_map_over_yield_actually_suspends() {
-        let eff = Effect::new(|_| Ok::<u64, ()>(1u64))
-            .flat_map(|n| {
-                from_async(|_r| async move {
-                    tokio::task::yield_now().await;
-                    Ok::<(), ()>(())
-                }).map(move |_| n + 1)
-            })
-            .flat_map(|n| {
-                from_async(|_r| async move {
-                    tokio::task::yield_now().await;
-                    Ok::<(), ()>(())
-                }).map(move |_| n + 1)
-            });
-        
-        let start = Instant::now();
-        let result = run_async(eff, ()).await.unwrap();
-        let elapsed = start.elapsed();
-        
-        assert_eq!(result, 3);
-        assert!(elapsed.as_micros() > 1, "Should have taken more than 1us due to yields, took {:?}", elapsed);
-    }
+    let start = Instant::now();
+    let result = run_async(eff, ()).await.unwrap();
+    let elapsed = start.elapsed();
+
+    assert_eq!(result, 42);
+    assert!(
+      elapsed.as_micros() > 1,
+      "Should have taken more than 1us due to yield, took {:?}",
+      elapsed
+    );
+  }
+
+  #[tokio::test(flavor = "current_thread")]
+  async fn flat_map_over_yield_actually_suspends() {
+    let eff = Effect::new(|_| Ok::<u64, ()>(1u64))
+      .flat_map(|n| {
+        from_async(|_r| async move {
+          tokio::task::yield_now().await;
+          Ok::<(), ()>(())
+        })
+        .map(move |_| n + 1)
+      })
+      .flat_map(|n| {
+        from_async(|_r| async move {
+          tokio::task::yield_now().await;
+          Ok::<(), ()>(())
+        })
+        .map(move |_| n + 1)
+      });
+
+    let start = Instant::now();
+    let result = run_async(eff, ()).await.unwrap();
+    let elapsed = start.elapsed();
+
+    assert_eq!(result, 3);
+    assert!(
+      elapsed.as_micros() > 1,
+      "Should have taken more than 1us due to yields, took {:?}",
+      elapsed
+    );
+  }
 }

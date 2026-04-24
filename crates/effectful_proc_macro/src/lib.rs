@@ -10,6 +10,7 @@ mod effect_tagged;
 mod expand;
 mod parse;
 mod service_derive;
+mod span;
 mod tagged_error_derive;
 mod transform;
 
@@ -31,6 +32,15 @@ pub fn derive_effect_data(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn effect_tagged(attr: TokenStream, item: TokenStream) -> TokenStream {
   effect_tagged::expand(attr, item)
+}
+
+/// Attribute macro for lazily instrumenting functions that return [`effectful::Effect`].
+///
+/// Supports a bounded `tracing::instrument`-like surface: `name`, `level`, `skip`, `skip_all`,
+/// `sample`, and `fields(...)`.
+#[proc_macro_attribute]
+pub fn span(attr: TokenStream, item: TokenStream) -> TokenStream {
+  span::expand(attr, item)
 }
 
 /// Derive macro: makes a struct act as its own service key.
@@ -96,5 +106,5 @@ pub fn effect(input: TokenStream) -> TokenStream {
   };
   expand::expand(kind).into()
 }
-mod test_yield;
 mod test_bind_star;
+mod test_yield;

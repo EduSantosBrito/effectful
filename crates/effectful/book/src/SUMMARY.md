@@ -88,6 +88,7 @@
   - [TestClock](./part4/ch15-02-test-clock.md)
   - [Mocking Services](./part4/ch15-03-mocking.md)
   - [Property Testing](./part4/ch15-04-property-testing.md)
+- [Observability](./part4/ch16-00-observability.md)
 
 # Appendices
 

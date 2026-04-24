@@ -96,9 +96,15 @@ impl Clone for ServiceContext {
 
 impl fmt::Debug for ServiceContext {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    let mut names = self.entries.values().map(|entry| entry.name).collect::<Vec<_>>();
+    let mut names = self
+      .entries
+      .values()
+      .map(|entry| entry.name)
+      .collect::<Vec<_>>();
     names.sort_unstable();
-    f.debug_struct("ServiceContext").field("services", &names).finish()
+    f.debug_struct("ServiceContext")
+      .field("services", &names)
+      .finish()
   }
 }
 
@@ -183,7 +189,11 @@ impl ServiceContext {
 
   /// Human-readable service names currently present.
   pub fn service_names(&self) -> Vec<&'static str> {
-    let mut names = self.entries.values().map(|entry| entry.name).collect::<Vec<_>>();
+    let mut names = self
+      .entries
+      .values()
+      .map(|entry| entry.name)
+      .collect::<Vec<_>>();
     names.sort_unstable();
     names
   }

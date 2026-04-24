@@ -124,9 +124,12 @@ impl<O, E> TypedLayer<O, E> {
     // Runtime dependency check placeholder
     // In full implementation, inspect context for required services
     if !self.requires.is_empty() {
-      return Err(LayerError::MissingDependencies {
-        missing: self.requires.iter().cloned().collect(),
-      }.into());
+      return Err(
+        LayerError::MissingDependencies {
+          missing: self.requires.iter().cloned().collect(),
+        }
+        .into(),
+      );
     }
     self.build()
   }

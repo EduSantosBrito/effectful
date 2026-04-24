@@ -27,8 +27,8 @@
 //! [`LayerFnFrom`], [`LayerFrom`], [`Stack`], [`StackThen`], [`merge_all`],
 //! [`LayerGraph`], [`LayerNode`], [`LayerPlan`], [`LayerPlannerError`], [`LayerDiagnostic`].
 
-pub mod factory;
 pub mod di;
+pub mod factory;
 pub mod graph;
 pub mod service;
 pub mod typed;

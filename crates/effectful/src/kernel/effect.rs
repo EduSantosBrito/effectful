@@ -176,9 +176,7 @@ where
         EffectRunState::PollFn(Box::new(move |cx| poller(env, cx)))
       }
     };
-    Self {
-      state: Some(state),
-    }
+    Self { state: Some(state) }
   }
 }
 
@@ -201,30 +199,26 @@ where
     loop {
       match this.state.take() {
         Some(EffectRunState::Ready(output)) => return Poll::Ready(output),
-        Some(EffectRunState::PollFn(mut poller)) => {
-          match poller(cx) {
-            Poll::Ready(output) => return Poll::Ready(output),
-            Poll::Pending => {
-              this.state = Some(EffectRunState::PollFn(poller));
-              return Poll::Pending;
-            }
+        Some(EffectRunState::PollFn(mut poller)) => match poller(cx) {
+          Poll::Ready(output) => return Poll::Ready(output),
+          Poll::Pending => {
+            this.state = Some(EffectRunState::PollFn(poller));
+            return Poll::Pending;
           }
-        }
+        },
         Some(EffectRunState::Borrow(init)) => {
           // Evaluate the deferred borrow on first poll
           let fut = init();
           this.state = Some(EffectRunState::AsyncStatic(fut));
           continue; // re-poll immediately with the new state
         }
-        Some(EffectRunState::AsyncStatic(mut fut)) => {
-          match Pin::new(&mut fut).poll(cx) {
-            Poll::Ready(output) => return Poll::Ready(output),
-            Poll::Pending => {
-              this.state = Some(EffectRunState::AsyncStatic(fut));
-              return Poll::Pending;
-            }
+        Some(EffectRunState::AsyncStatic(mut fut)) => match Pin::new(&mut fut).poll(cx) {
+          Poll::Ready(output) => return Poll::Ready(output),
+          Poll::Pending => {
+            this.state = Some(EffectRunState::AsyncStatic(fut));
+            return Poll::Pending;
           }
-        }
+        },
         None => panic!("EffectRunFuture polled after completion"),
       }
     }
@@ -420,7 +414,7 @@ where
   AsyncPoll(AsyncPollFactory<A, E, R>),
 }
 
-trait ProgramOp<A, E, R>
+pub(crate) trait ProgramOp<A, E, R>
 where
   A: 'static,
   E: 'static,
@@ -462,7 +456,10 @@ where
 }
 
 #[inline(always)]
-fn step_into_bind_future<'a, A, E, R>(step: SyncStep<A, E, R>, r: &'a mut R) -> BoxFuture<'a, Result<A, E>>
+fn step_into_bind_future<'a, A, E, R>(
+  step: SyncStep<A, E, R>,
+  r: &'a mut R,
+) -> BoxFuture<'a, Result<A, E>>
 where
   A: 'static,
   E: 'static,
@@ -558,7 +555,7 @@ where
   R: 'static,
 {
   #[inline]
-  fn new_step<F>(f: F) -> Self
+  pub(crate) fn new_step<F>(f: F) -> Self
   where
     F: FnOnce(&mut R) -> SyncStep<A, E, R> + 'static,
   {
@@ -655,7 +652,7 @@ where
   }
 
   #[inline]
-  fn new_program<P>(program: P) -> Self
+  pub(crate) fn new_program<P>(program: P) -> Self
   where
     P: ProgramOp<A, E, R> + 'static,
   {
@@ -692,9 +689,7 @@ where
     R: ServiceLookup<S> + 'static,
     S: Service,
   {
-    Effect::new(|r: &mut R| {
-      Ok(ServiceLookup::<S>::service(r).cloned())
-    })
+    Effect::new(|r: &mut R| Ok(ServiceLookup::<S>::service(r).cloned()))
   }
 
   // ── Execution ─────────────────────────────────────────────────────────
@@ -792,10 +787,7 @@ where
         let output = fut.await;
         output.map(g)
       }),
-      repr => Effect::new_program(MapProgram {
-        source: repr,
-        f: g,
-      }),
+      repr => Effect::new_program(MapProgram { source: repr, f: g }),
     }
   }
 
@@ -854,10 +846,7 @@ where
           step_into_bind_future(start_effect(h(a), r), r).await
         })
       }),
-      repr => Effect::new_program(FlatMapProgram {
-        source: repr,
-        f: h,
-      }),
+      repr => Effect::new_program(FlatMapProgram { source: repr, f: h }),
     }
   }
 
@@ -906,9 +895,9 @@ where
               Poll::Pending => Poll::Pending,
             }))
           }
-          SyncStep::AsyncStatic(next) => SyncStep::AsyncStatic(map_result_future(next, move |output| {
-            output.map_err(h)
-          })),
+          SyncStep::AsyncStatic(next) => {
+            SyncStep::AsyncStatic(map_result_future(next, move |output| output.map_err(h)))
+          }
         }),
         EffectOp::AsyncPoll(f) => Effect::new_poll(move |r| {
           let mut next = f(r);
@@ -931,13 +920,11 @@ where
           map_result_future(f(r), move |output| output.map_err(h))
         }),
         EffectOp::AsyncStatic(f) => Effect::new_static_async(move |r| {
-          map_result_future(f(r), move |output| {
-            output.map_err(h)
-          })
+          map_result_future(f(r), move |output| output.map_err(h))
         }),
-        EffectOp::AsyncInline(fut) => Effect::new_inline_async(
-          map_result_future(fut, move |output| output.map_err(h))
-        ),
+        EffectOp::AsyncInline(fut) => {
+          Effect::new_inline_async(map_result_future(fut, move |output| output.map_err(h)))
+        }
       },
       repr => {
         let source = Effect::from_repr(repr);
@@ -1158,7 +1145,6 @@ where
       })
     })
   }
-
 }
 
 impl<A, E> Effect<A, E, ServiceContext>
@@ -1235,12 +1221,10 @@ where
           Poll::Pending => Poll::Pending,
         }))
       }
-      SyncStep::AsyncStatic(next) => {
-        SyncStep::AsyncStatic(box_future(async move {
-          let output = next.await;
-          output.map(f)
-        }))
-      }
+      SyncStep::AsyncStatic(next) => SyncStep::AsyncStatic(box_future(async move {
+        let output = next.await;
+        output.map(f)
+      })),
     }
   }
 }
@@ -1278,7 +1262,8 @@ where
       })),
       SyncStep::AsyncPoll(mut next) => SyncStep::AsyncBorrow(Box::new(move |r| {
         box_future(async move {
-          let a = step_into_bind_future(SyncStep::AsyncPoll(Box::new(move |r, cx| next(r, cx))), r).await?;
+          let a = step_into_bind_future(SyncStep::AsyncPoll(Box::new(move |r, cx| next(r, cx))), r)
+            .await?;
           step_into_bind_future(start_effect(f(a), r), r).await
         })
       })),
@@ -1659,7 +1644,7 @@ mod tests {
         .map(|n| n + 1)
         .flat_map(|n| from_async(move |_r| async move { Ok::<u64, &'static str>(n + 2) }))
         .map(|n| n * 3);
-      let out = pollster::block_on(crate::runtime::run_async(eff, ())); 
+      let out = pollster::block_on(crate::runtime::run_async(eff, ()));
       assert_eq!(out, Ok(12));
     }
 

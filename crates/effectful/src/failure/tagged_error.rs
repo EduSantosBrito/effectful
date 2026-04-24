@@ -35,10 +35,10 @@ use core::marker::PhantomData;
 ///
 /// Implement this trait on error enums to enable `catch_tag`/`catch_tags`.
 pub trait TaggedError: Debug + Clone + 'static {
-    /// Returns a string tag identifying the error variant.
-    ///
-    /// Tags should be stable and unique per variant.
-    fn tag(&self) -> &'static str;
+  /// Returns a string tag identifying the error variant.
+  ///
+  /// Tags should be stable and unique per variant.
+  fn tag(&self) -> &'static str;
 }
 
 /// Catch a specific error variant by tag.
@@ -53,18 +53,15 @@ pub trait TaggedError: Debug + Clone + 'static {
 /// - `R`: Environment type
 /// - `F`: Handler function type
 /// - `E2`: Handler's error type
-pub fn catch_tag<A, E, R, F, E2>(
-    effect: Effect<A, E, R>,
-    handler: F,
-) -> Effect<A, E2, R>
+pub fn catch_tag<A, E, R, F, E2>(effect: Effect<A, E, R>, handler: F) -> Effect<A, E2, R>
 where
-    E: TaggedError,
-    R: 'static,
-    F: FnOnce(E) -> Effect<A, E2, R> + 'static,
-    A: 'static,
-    E2: 'static,
+  E: TaggedError,
+  R: 'static,
+  F: FnOnce(E) -> Effect<A, E2, R> + 'static,
+  A: 'static,
+  E2: 'static,
 {
-    effect.catch(handler)
+  effect.catch(handler)
 }
 
 /// Builder for handling multiple error tags.
@@ -72,32 +69,32 @@ where
 /// Created by [`catch_tags`]. Use `.on(tag, handler)` to register handlers.
 pub struct TagHandler<A, E, R>
 where
-    A: 'static,
-    E: 'static,
-    R: 'static,
+  A: 'static,
+  E: 'static,
+  R: 'static,
 {
-    handlers: Vec<(
-        &'static str,
-        Box<dyn FnOnce(E) -> Effect<A, E, R> + 'static>,
-    )>,
-    _pd: PhantomData<(A, E, R)>,
+  handlers: Vec<(
+    &'static str,
+    Box<dyn FnOnce(E) -> Effect<A, E, R> + 'static>,
+  )>,
+  _pd: PhantomData<(A, E, R)>,
 }
 
 impl<A, E, R> TagHandler<A, E, R>
 where
-    A: 'static,
-    E: 'static,
-    R: 'static,
+  A: 'static,
+  E: 'static,
+  R: 'static,
 {
-    /// Register a handler for errors with the given tag.
-    #[inline]
-    pub fn on<F>(mut self, tag: &'static str, handler: F) -> Self
-    where
-        F: FnOnce(E) -> Effect<A, E, R> + 'static,
-    {
-        self.handlers.push((tag, Box::new(handler)));
-        self
-    }
+  /// Register a handler for errors with the given tag.
+  #[inline]
+  pub fn on<F>(mut self, tag: &'static str, handler: F) -> Self
+  where
+    F: FnOnce(E) -> Effect<A, E, R> + 'static,
+  {
+    self.handlers.push((tag, Box::new(handler)));
+    self
+  }
 }
 
 /// Catch multiple error variants using a builder pattern.
@@ -110,30 +107,27 @@ where
 ///         .on("network", |e| Effect::retry(schedule))
 /// });
 /// ```
-pub fn catch_tags<A, E, R, F>(
-    effect: Effect<A, E, R>,
-    builder: F,
-) -> Effect<A, E, R>
+pub fn catch_tags<A, E, R, F>(effect: Effect<A, E, R>, builder: F) -> Effect<A, E, R>
 where
-    E: TaggedError,
-    R: Clone + 'static,
-    F: FnOnce(TagHandler<A, E, R>) -> TagHandler<A, E, R> + 'static,
-    A: 'static,
+  E: TaggedError,
+  R: Clone + 'static,
+  F: FnOnce(TagHandler<A, E, R>) -> TagHandler<A, E, R> + 'static,
+  A: 'static,
 {
-    let handler = builder(TagHandler {
-        handlers: Vec::new(),
-        _pd: PhantomData,
-    });
+  let handler = builder(TagHandler {
+    handlers: Vec::new(),
+    _pd: PhantomData,
+  });
 
-    effect.catch(move |e: E| {
-        let tag = e.tag();
-        for (handler_tag, handler_fn) in handler.handlers {
-            if handler_tag == tag {
-                return handler_fn(e);
-            }
-        }
-        crate::kernel::fail(e)
-    })
+  effect.catch(move |e: E| {
+    let tag = e.tag();
+    for (handler_tag, handler_fn) in handler.handlers {
+      if handler_tag == tag {
+        return handler_fn(e);
+      }
+    }
+    crate::kernel::fail(e)
+  })
 }
 
 /// Convert recoverable errors into panics (defects).
@@ -148,11 +142,11 @@ where
 /// ```
 pub fn or_die<A, E, R>(effect: Effect<A, E, R>) -> Effect<A, (), R>
 where
-    E: Debug + 'static,
-    R: 'static,
-    A: 'static,
+  E: Debug + 'static,
+  R: 'static,
+  A: 'static,
 {
-    effect.map_error(|e| {
-        panic!("Effect failed: {:?}", e);
-    })
+  effect.map_error(|e| {
+    panic!("Effect failed: {:?}", e);
+  })
 }

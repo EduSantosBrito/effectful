@@ -1,0 +1,5 @@
+error: effectful::span: function must return Effect
+ --> tests/ui/span_non_effect_return.rs:4:14
+  |
+4 | fn work() -> u32 {
+  |              ^^^

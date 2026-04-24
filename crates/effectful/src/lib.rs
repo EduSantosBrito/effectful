@@ -56,7 +56,7 @@ extern crate self as effectful;
 
 #[allow(deprecated)]
 pub use effectful_macro::{ctx, err, layer_graph, layer_node, pipe, req, service_def, service_key};
-pub use effectful_proc_macro::{EffectData, Service, TaggedError, effect, effect_tagged};
+pub use effectful_proc_macro::{EffectData, Service, TaggedError, effect, effect_tagged, span};
 
 pub mod algebra;
 pub mod collections;
@@ -90,9 +90,9 @@ pub use concurrency::{
   fiber_never, fiber_succeed, interrupt_all, with_fiber_id,
 };
 pub use context::{
-  Cons, Context, Get, GetMut, HasTag, Here, Matcher, MissingService, Nil, Service,
-  ServiceContext, ServiceLookup, Skip0, Skip1, Skip2, Skip3, Skip4, Tag, Tagged, There,
-  ThereHere, prepend_cell, tagged,
+  Cons, Context, Get, GetMut, HasTag, Here, Matcher, MissingService, Nil, Service, ServiceContext,
+  ServiceLookup, Skip0, Skip1, Skip2, Skip3, Skip4, Tag, Tagged, There, ThereHere, prepend_cell,
+  tagged,
 };
 pub use coordination::semaphore::Permit;
 pub use coordination::{
@@ -108,15 +108,22 @@ pub use foundation::mutable_ref::MutableRef;
 pub use foundation::piping::Pipe;
 pub use foundation::predicate::Predicate;
 pub use layer::{
-  Layer, LayerBuild, LayerDiagnostic, LayerEffect, LayerExt, LayerFn, LayerFnFrom, LayerFrom,
-  LayerGraph, LayerNode, LayerPlan, LayerPlannerError, LayerError, MemoizedLayer, MergedLayer,
+  Layer, LayerBuild, LayerDiagnostic, LayerEffect, LayerError, LayerExt, LayerFn, LayerFnFrom,
+  LayerFrom, LayerGraph, LayerNode, LayerPlan, LayerPlannerError, MemoizedLayer, MergedLayer,
   Stack, StackThen, TypedLayer, TypedLayerExt, merge_all,
 };
 pub use observability::{
-  AnnotateCurrentSpanErr, AnnotateCurrentSpanSuccess, EffectEvent, FiberEvent, LogSpan, Metric,
-  SpanRecord, TracingConfig, TracingFiberRefs, TracingSnapshot, annotate_current_span,
-  emit_effect_event, emit_fiber_event, install_tracing_layer, metric_make, snapshot_tracing,
-  with_span,
+  __effectful_span_lazy, __effectful_span_lazy_scoped, AnnotateCurrentSpanErr,
+  AnnotateCurrentSpanSuccess, EffectEvent, FiberEvent, LogSpan, Metric,
+  SequentialTraceContextProvider, SpanAttributeValue, SpanContext, SpanEvent, SpanId, SpanLevel,
+  SpanOptions, SpanRecord, SpanStatus, TraceContextProvider, TraceFlags, TraceId,
+  TraceParentParseError, TracingConfig, TracingFiberRefs, TracingSnapshot, annotate_current_span,
+  annotate_current_span_attribute, emit_current_span_event,
+  emit_current_span_event_with_attributes, emit_effect_event, emit_fiber_event,
+  install_tracing_layer, install_tracing_layer_with_clock,
+  install_tracing_layer_with_context_provider,
+  install_tracing_layer_with_context_provider_and_clock, metric_make, snapshot_tracing,
+  tracing_enabled, with_span, with_span_options,
 };
 pub use resource::{Cache, CacheStats, Finalizer, KeyedPool, Pool, Scope};
 pub use runtime::{

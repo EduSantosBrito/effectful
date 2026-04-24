@@ -5,7 +5,9 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
-use syn::{parse_macro_input, Attribute, Data, DeriveInput, Fields, Ident, Lit, Meta, MetaNameValue};
+use syn::{
+  Attribute, Data, DeriveInput, Fields, Ident, Lit, Meta, MetaNameValue, parse_macro_input,
+};
 
 /// Extract the tag string from `#[tag("...")]` attribute.
 fn extract_tag(attrs: &[Attribute], variant_name: &str) -> String {

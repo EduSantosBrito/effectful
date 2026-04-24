@@ -165,10 +165,7 @@ where
   /// The output contains only this layer's services; provider services are used
   /// to build `self` and are then hidden, matching Effect's `Layer.provide`.
   #[inline]
-  pub fn provide<RProvider>(
-    self,
-    provider: Layer<RProvider, E, ()>,
-  ) -> Layer<ROut, E, ()>
+  pub fn provide<RProvider>(self, provider: Layer<RProvider, E, ()>) -> Layer<ROut, E, ()>
   where
     RProvider: 'static,
   {
@@ -291,10 +288,9 @@ mod tests {
     let config = Layer::<Config, MissingService>::succeed(Config {
       url: "postgres://".to_string(),
     });
-    let database =
-      Layer::<Database, MissingService, Config>::effect("Database", || {
-        Config::use_sync(|config| Database { url: config.url })
-      });
+    let database = Layer::<Database, MissingService, Config>::effect("Database", || {
+      Config::use_sync(|config| Database { url: config.url })
+    });
     let program: Effect<String, MissingService, ServiceContext> =
       Database::use_sync(|database| database.url);
 
@@ -320,10 +316,9 @@ mod tests {
 
   #[test]
   fn missing_dependency_fails_layer_build() {
-    let database =
-      Layer::<Database, MissingService, Config>::effect("Database", || {
-        Config::use_sync(|config| Database { url: config.url })
-      });
+    let database = Layer::<Database, MissingService, Config>::effect("Database", || {
+      Config::use_sync(|config| Database { url: config.url })
+    });
 
     let result = run_blocking(database.build(), ());
 
