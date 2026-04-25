@@ -1,6 +1,6 @@
 # API Quick Reference
 
-A condensed reference for commonly used items in `effectful` 0.2.0. For complete signatures, run `cargo doc --open -p effectful`.
+A condensed reference for commonly used items in `effectful` 0.2.2. For complete signatures, run `cargo doc --open -p effectful`.
 
 ## Core Types
 
@@ -53,6 +53,13 @@ A condensed reference for commonly used items in `effectful` 0.2.0. For complete
 |----------|-------|
 | `run_blocking(effect, env)` | Blocking synchronous runner |
 | `run_async(effect, env).await` | Async runner |
+| `#[effect_test]` | Attribute for tests that return `Effect`; harness executes and panics on `Err(E: Debug)` |
+| `expect_effect_test(effect).await` | Async test helper for `R: Default`, panics on failure |
+| `expect_effect_test_with_env(effect, env).await` | Async test helper with explicit environment |
+| `expect_effect_test_with_layer(effect, layer).await` | Async test helper for `ServiceContext` plus `Layer` |
+| `run_effect_test(effect).await` | Async test helper returning `Result<A, E>` |
+| `run_effect_test_with_env(effect, env).await` | Async test helper returning `Result<A, E>` with explicit environment |
+| `TestRuntime::with_env(fixture)` | Reusable async test adapter with environment fixture |
 | `run_test(effect, env)` | Test runner returning `Exit<A, E>` |
 | `run_test_with_clock(effect, env, clock)` | Test runner with explicit `TestClock` argument |
 

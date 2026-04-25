@@ -10,8 +10,13 @@
 pub mod snapshot;
 pub mod test_runtime;
 
+#[doc(hidden)]
+pub use tokio as __tokio;
+
+pub use crate::effect_test;
 pub use snapshot::SnapshotAssertion;
 pub use test_runtime::{
-  assert_no_leaked_fibers, assert_no_unclosed_scopes, record_leaked_fiber, record_unclosed_scope,
-  run_test, run_test_with_clock,
+  TestRuntime, assert_no_leaked_fibers, assert_no_unclosed_scopes, expect_effect_test,
+  expect_effect_test_with_env, expect_effect_test_with_layer, record_leaked_fiber,
+  record_unclosed_scope, run_effect_test, run_effect_test_with_env, run_test, run_test_with_clock,
 };

@@ -232,6 +232,72 @@ mod tests {
 
 ---
 
+## Effect-Returning Tests
+
+Effectful tests should return `Effect` and let the harness execute them. Downstream tests should not call `Effect::run(&mut ...)` directly; direct execution belongs inside runtime and test harness internals.
+
+```rust
+use effectful::{Effect, effect_test};
+
+#[effect_test]
+fn succeeds() -> Effect<(), &'static str, ()> {
+    Effect::new(|_| Ok(()))
+}
+```
+
+Use an environment fixture when the effect needs `ServiceContext`:
+
+```rust
+use effectful::{Effect, Service, ServiceContext, effect_test};
+
+#[derive(Clone, Service)]
+struct Config {
+    port: u16,
+}
+
+fn test_env() -> ServiceContext {
+    Config { port: 8080 }.to_context()
+}
+
+#[effect_test(env = "test_env")]
+fn reads_config() -> Effect<(), effectful::MissingService, ServiceContext> {
+    Effect::service::<Config>().map(|config| assert_eq!(config.port, 8080))
+}
+```
+
+Use a layer fixture when the services should be built by a layer:
+
+```rust
+use effectful::{Effect, Layer, MissingService, Service, ServiceContext, effect_test};
+
+#[derive(Clone, Service)]
+struct Config {
+    port: u16,
+}
+
+fn test_layer() -> Layer<Config, MissingService, ()> {
+    Layer::succeed(Config { port: 8080 })
+}
+
+#[effect_test(layer = "test_layer")]
+fn reads_layer_config() -> Effect<(), MissingService, ServiceContext> {
+    Effect::service::<Config>().map(|config| assert_eq!(config.port, 8080))
+}
+```
+
+If an attribute macro is not suitable, keep execution behind `effectful::testing` helpers:
+
+```rust
+#[tokio::test]
+async fn succeeds() {
+    effectful::testing::expect_effect_test(effect_program()).await;
+}
+```
+
+`#[effect_test]` currently lives in `effectful::testing` via the main `effectful` crate re-export. This is the smallest correct home because the crate already owns `Effect`, `ServiceContext`, layers, and test hygiene counters. A companion crate can be added later if the macro surface grows enough to justify splitting dependencies or release cadence.
+
+---
+
 ## Mutation Coverage Checklist
 
 For every function, systematically test these mutations:

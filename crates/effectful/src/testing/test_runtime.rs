@@ -1,8 +1,43 @@
 //! Deterministic test runtime harness helpers.
+//!
+//! Prefer effect-returning tests over calling [`Effect::run`](crate::Effect::run) in test bodies.
+//! The adapter owns execution, environment creation, hygiene checks, and failure formatting.
+//!
+//! ```rust
+//! use effectful::{Effect, effect_test};
+//!
+//! #[effect_test]
+//! fn succeeds() -> Effect<(), &'static str, ()> {
+//!   Effect::new(|_| Ok(()))
+//! }
+//! ```
+//!
+//! `#[effect_test]` expands to a current-thread Tokio test through `effectful::testing`, so
+//! downstream crates do not need to name `tokio` in each test body.
+//!
+//! Provide a service context fixture with `env = "path"`:
+//!
+//! ```rust
+//! use effectful::{Effect, Service, ServiceContext, effect_test};
+//!
+//! #[derive(Clone, Service)]
+//! struct Clock { value: u64 }
+//!
+//! fn test_env() -> ServiceContext {
+//!   Clock { value: 1 }.to_context()
+//! }
+//!
+//! #[effect_test(env = "test_env")]
+//! fn uses_context() -> Effect<(), effectful::MissingService, ServiceContext> {
+//!   Effect::service::<Clock>().map(|clock| assert_eq!(clock.value, 1))
+//! }
+//! ```
 
+use crate::layer::Layer;
 use crate::runtime::Never;
-use crate::{Effect, Exit, TestClock};
+use crate::{Effect, Exit, ServiceContext, TestClock};
 use std::cell::Cell;
+use std::fmt::Debug;
 
 thread_local! {
   static LEAKED_FIBERS: Cell<usize> = const { Cell::new(0) };
@@ -12,6 +47,20 @@ thread_local! {
 fn reset_counters() {
   LEAKED_FIBERS.with(|c| c.set(0));
   UNCLOSED_SCOPES.with(|c| c.set(0));
+}
+
+fn assert_hygiene_counters() {
+  let fiber_leaks = LEAKED_FIBERS.with(|c| c.get());
+  assert_eq!(
+    fiber_leaks, 0,
+    "deterministic test harness detected leaked fibers: {fiber_leaks}"
+  );
+
+  let scope_leaks = UNCLOSED_SCOPES.with(|c| c.get());
+  assert_eq!(
+    scope_leaks, 0,
+    "deterministic test harness detected unclosed scopes: {scope_leaks}"
+  );
 }
 
 /// Internal hook for tests that need to simulate leaked fibers.
@@ -48,6 +97,127 @@ pub fn assert_no_unclosed_scopes() -> Effect<(), Never, ()> {
   })
 }
 
+/// Small async runtime adapter for effect-returning tests.
+///
+/// `TestRuntime` lets downstream crates keep direct effect execution at the test harness edge.
+/// Use [`TestRuntime::default`] for `R: Default`, or [`TestRuntime::with_env`] to provide a
+/// context/fixture per test run.
+pub struct TestRuntime<R, F = fn() -> R>
+where
+  R: 'static,
+  F: FnOnce() -> R,
+{
+  make_env: F,
+}
+
+impl<R> Default for TestRuntime<R>
+where
+  R: Default + 'static,
+{
+  fn default() -> Self {
+    Self {
+      make_env: R::default,
+    }
+  }
+}
+
+impl<R, F> TestRuntime<R, F>
+where
+  R: 'static,
+  F: FnOnce() -> R,
+{
+  /// Create a test runtime from an environment fixture.
+  #[inline]
+  pub fn with_env(make_env: F) -> Self {
+    Self { make_env }
+  }
+
+  /// Run an effect under the test harness and return its result.
+  #[inline]
+  pub async fn run<A, E>(self, effect: Effect<A, E, R>) -> Result<A, E>
+  where
+    A: 'static,
+    E: 'static,
+  {
+    let env = (self.make_env)();
+    run_effect_test_with_env(effect, env).await
+  }
+
+  /// Run an effect under the test harness and panic with `Debug` output on failure.
+  #[inline]
+  pub async fn expect<A, E>(self, effect: Effect<A, E, R>) -> A
+  where
+    A: 'static,
+    E: Debug + 'static,
+  {
+    expect_effect_test_with_env(effect, (self.make_env)()).await
+  }
+}
+
+/// Run an effect-returning test with a default environment.
+#[inline]
+pub async fn run_effect_test<A, E, R>(effect: Effect<A, E, R>) -> Result<A, E>
+where
+  A: 'static,
+  E: 'static,
+  R: Default + 'static,
+{
+  run_effect_test_with_env(effect, R::default()).await
+}
+
+/// Run an effect-returning test with a provided environment.
+#[inline]
+pub async fn run_effect_test_with_env<A, E, R>(effect: Effect<A, E, R>, mut env: R) -> Result<A, E>
+where
+  A: 'static,
+  E: 'static,
+  R: 'static,
+{
+  reset_counters();
+  let result = effect.run(&mut env).await;
+  assert_hygiene_counters();
+  result
+}
+
+/// Run an effect-returning test with a default environment and panic on failure.
+#[inline]
+pub async fn expect_effect_test<A, E, R>(effect: Effect<A, E, R>) -> A
+where
+  A: 'static,
+  E: Debug + 'static,
+  R: Default + 'static,
+{
+  expect_effect_test_with_env(effect, R::default()).await
+}
+
+/// Run an effect-returning test with a provided environment and panic on failure.
+#[inline]
+pub async fn expect_effect_test_with_env<A, E, R>(effect: Effect<A, E, R>, env: R) -> A
+where
+  A: 'static,
+  E: Debug + 'static,
+  R: 'static,
+{
+  match run_effect_test_with_env(effect, env).await {
+    Ok(value) => value,
+    Err(error) => panic!("effectful test failed: {error:?}"),
+  }
+}
+
+/// Run a `ServiceContext` effect-returning test with a layer and panic on failure.
+#[inline]
+pub async fn expect_effect_test_with_layer<A, E, ROut>(
+  effect: Effect<A, E, ServiceContext>,
+  layer: Layer<ROut, E, ()>,
+) -> A
+where
+  A: 'static,
+  E: Debug + 'static,
+  ROut: 'static,
+{
+  expect_effect_test(effect.provide(layer)).await
+}
+
 /// Run an effect in deterministic test mode and return an `Exit` value.
 #[inline]
 pub fn run_test<A, E, R>(effect: Effect<A, E, R>, env: R) -> Exit<A, E>
@@ -58,8 +228,7 @@ where
 {
   reset_counters();
   let result = crate::runtime::run_blocking(effect, env);
-  let _ = crate::runtime::run_blocking(assert_no_leaked_fibers(), ());
-  let _ = crate::runtime::run_blocking(assert_no_unclosed_scopes(), ());
+  assert_hygiene_counters();
   match result {
     Ok(value) => Exit::succeed(value),
     Err(error) => Exit::fail(error),
@@ -84,8 +253,33 @@ where
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::{fail, succeed};
+  use crate::{MissingService, Service, fail, succeed};
   use rstest::rstest;
+
+  #[derive(Clone, Debug, PartialEq, Service)]
+  struct TestService {
+    value: u32,
+  }
+
+  struct TestFailure {
+    code: u32,
+  }
+
+  impl std::fmt::Debug for TestFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+      f.debug_struct("TestFailure")
+        .field("code", &self.code)
+        .finish()
+    }
+  }
+
+  fn service_context() -> ServiceContext {
+    TestService { value: 9 }.to_context()
+  }
+
+  fn service_layer() -> Layer<TestService, MissingService, ()> {
+    Layer::succeed(TestService { value: 11 })
+  }
 
   mod run_test {
     use super::*;
@@ -110,6 +304,59 @@ mod tests {
       let clock = TestClock::new(std::time::Instant::now());
       let exit = run_test_with_clock(effect, (), clock);
       assert_eq!(exit, Exit::succeed(value));
+    }
+  }
+
+  mod effect_test_attribute {
+    use super::*;
+
+    #[crate::effect_test]
+    fn effect_returning_test_with_unit_environment_passes() -> Effect<(), &'static str, ()> {
+      Effect::new(|_| Ok(()))
+    }
+
+    #[crate::effect_test(env = "service_context")]
+    fn effect_returning_test_with_provided_context_passes()
+    -> Effect<(), MissingService, ServiceContext> {
+      Effect::<TestService, MissingService, ServiceContext>::service::<TestService>()
+        .map(|service| assert_eq!(service.value, 9))
+    }
+
+    #[crate::effect_test(layer = "service_layer")]
+    fn effect_returning_test_with_provided_layer_passes()
+    -> Effect<(), MissingService, ServiceContext> {
+      Effect::<TestService, MissingService, ServiceContext>::service::<TestService>()
+        .map(|service| assert_eq!(service.value, 11))
+    }
+  }
+
+  mod async_harness {
+    use super::*;
+
+    #[tokio::test]
+    async fn run_effect_test_with_env_returns_success_value() {
+      let effect = Effect::<u32, MissingService, ServiceContext>::service::<TestService>()
+        .map(|service| service.value);
+
+      let result = run_effect_test_with_env(effect, service_context()).await;
+
+      assert_eq!(result, Ok(9));
+    }
+
+    #[tokio::test]
+    async fn test_runtime_with_env_returns_success_value() {
+      let effect = Effect::<u32, MissingService, ServiceContext>::service::<TestService>()
+        .map(|service| service.value);
+
+      let result = TestRuntime::with_env(service_context).run(effect).await;
+
+      assert_eq!(result, Ok(9));
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "effectful test failed: TestFailure { code: 7 }")]
+    async fn expect_effect_test_with_failure_formats_debug_error() {
+      expect_effect_test(fail::<(), TestFailure, ()>(TestFailure { code: 7 })).await;
     }
   }
 

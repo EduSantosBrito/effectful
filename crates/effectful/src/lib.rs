@@ -56,7 +56,9 @@ extern crate self as effectful;
 
 #[allow(deprecated)]
 pub use effectful_macro::{ctx, err, layer_graph, layer_node, pipe, req, service_def, service_key};
-pub use effectful_proc_macro::{EffectData, Service, TaggedError, effect, effect_tagged, span};
+pub use effectful_proc_macro::{
+  EffectData, Service, TaggedError, effect, effect_tagged, effect_test, span,
+};
 
 pub mod algebra;
 pub mod collections;
@@ -147,8 +149,8 @@ pub use streaming::{
   send_chunk, stream_from_channel, stream_from_channel_with_policy,
 };
 pub use testing::{
-  assert_no_leaked_fibers, assert_no_unclosed_scopes, record_leaked_fiber, record_unclosed_scope,
-  run_test, run_test_with_clock,
+  TestRuntime, assert_no_leaked_fibers, assert_no_unclosed_scopes, record_leaked_fiber,
+  record_unclosed_scope, run_effect_test, run_effect_test_with_env, run_test, run_test_with_clock,
 };
 
 // ─── Backward-compatible module re-exports ────────────────────────────────────

@@ -7,6 +7,7 @@
 
 mod effect_data;
 mod effect_tagged;
+mod effect_test;
 mod expand;
 mod parse;
 mod service_derive;
@@ -32,6 +33,15 @@ pub fn derive_effect_data(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn effect_tagged(attr: TokenStream, item: TokenStream) -> TokenStream {
   effect_tagged::expand(attr, item)
+}
+
+/// Attribute macro for tests whose body returns an [`effectful::Effect`].
+///
+/// The generated Tokio test owns effect execution and turns `Err(E)` into a panic
+/// formatted with `Debug`.
+#[proc_macro_attribute]
+pub fn effect_test(attr: TokenStream, item: TokenStream) -> TokenStream {
+  effect_test::expand(attr, item)
 }
 
 /// Attribute macro for lazily instrumenting functions that return [`effectful::Effect`].

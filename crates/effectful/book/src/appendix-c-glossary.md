@@ -104,8 +104,11 @@ Synchronous runner: `run_blocking(effect, env)`. Use at application/test boundar
 
 ---
 
+**`effect_test`**
+Attribute for effect-returning tests. The test body returns `Effect`; the harness executes it, provides the environment or layer, checks leak counters, and panics with `Debug` output on typed failure.
+
 **`run_test`**
-Test runner: `run_test(effect, env) -> Exit<A, E>`. It resets and checks the test leak counters around the run.
+Lower-level synchronous test runner: `run_test(effect, env) -> Exit<A, E>`. It resets and checks the test leak counters around the run.
 
 ---
 

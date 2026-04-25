@@ -53,20 +53,22 @@ impl DbImpl for InMemoryDb {
 ## Injecting the Test Double
 
 ```rust,ignore
-#[test]
-fn get_user_returns_saved_user() {
-    let db = Db { inner: Arc::new(InMemoryDb::new()) };
-    let env = db.to_context();
-
+#[effect_test(env = "test_env")]
+fn get_user_returns_saved_user() -> Effect<(), DbError, ServiceContext> {
     let effect = Db::use_(|db| {
         effect! {
             bind* db.save_user(User { id: UserId::new(1), name: "Alice".into() });
-            bind* db.get_user(UserId::new(1))
+            let user = bind* db.get_user(UserId::new(1));
+            assert_eq!(user.name, "Alice");
         }
     });
 
-    let exit = run_test(effect, env);
-    assert!(matches!(exit, Exit::Success(user) if user.name == "Alice"));
+    effect
+}
+
+fn test_env() -> ServiceContext {
+    let db = Db { inner: Arc::new(InMemoryDb::new()) };
+    db.to_context()
 }
 ```
 
@@ -137,10 +139,9 @@ fn test_layer() -> Layer<(Db, Mailer), AppError, ()> {
         .merge(Layer::succeed(Mailer::spy()))
 }
 
-#[test]
-fn full_registration_flow_works() {
-    let exit = run_test(full_registration_flow().provide(test_layer()), ());
-    assert!(matches!(exit, Exit::Success(_)));
+#[effect_test(layer = "test_layer")]
+fn full_registration_flow_works() -> Effect<(), AppError, ServiceContext> {
+    full_registration_flow().void()
 }
 ```
 

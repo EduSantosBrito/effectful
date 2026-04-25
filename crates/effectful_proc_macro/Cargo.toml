@@ -1,6 +1,6 @@
 [package]
 name = "effectful_proc_macro"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Procedural `effect!` macro for the `effectful` crate (proc-macro only; declarative macros live in `effectful_macro`)"
 license = "CC-BY-SA-4.0"
