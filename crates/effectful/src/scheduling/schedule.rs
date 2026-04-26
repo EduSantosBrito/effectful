@@ -233,10 +233,7 @@ impl Schedule {
         let delay = order::clamp(&ord, candidate, duration::ZERO, Duration::MAX);
         Some(ScheduleDecision::continue_after(delay))
       }
-      Schedule::Compose(a, b) => match (
-        a.next(ScheduleInput::default()),
-        b.next(ScheduleInput::default()),
-      ) {
+      Schedule::Compose(a, b) => match (a.next(input), b.next(input)) {
         (Some(da), Some(db)) => {
           let ord = order::duration();
           let delay = order::max(&ord, da.delay, db.delay);
@@ -245,7 +242,7 @@ impl Schedule {
         _ => None,
       },
       Schedule::Jittered(inner) => inner
-        .next(ScheduleInput::default())
+        .next(input)
         .map(|decision| ScheduleDecision::continue_after(jitter_80_120(decision.delay))),
       Schedule::RecursWhile { pred } => {
         if pred(&input) {
@@ -675,6 +672,33 @@ mod tests {
       let mut s = Schedule::recurs(1).compose(Schedule::recurs(3));
       assert!(s.next(ScheduleInput::default()).is_some());
       assert_eq!(s.next(ScheduleInput::default()), None);
+    }
+
+    #[test]
+    fn compose_passes_attempt_input_to_inner_predicate() {
+      let mut s =
+        Schedule::recurs(1).compose(Schedule::recurs_while(Box::new(|i: &ScheduleInput| {
+          i.attempt == 3
+        })));
+
+      assert_eq!(
+        s.next(ScheduleInput { attempt: 3 }),
+        Some(ScheduleDecision::continue_after(duration::ZERO))
+      );
+    }
+
+    #[test]
+    fn compose_passes_attempt_input_to_inner_contramap() {
+      let mut s = Schedule::recurs(1).compose(
+        Schedule::recurs_until(Box::new(|i: &ScheduleInput| i.attempt >= 4)).contramap(
+          |mut i: ScheduleInput| {
+            i.attempt = i.attempt.saturating_add(1);
+            i
+          },
+        ),
+      );
+
+      assert_eq!(s.next(ScheduleInput { attempt: 3 }), None);
     }
 
     #[rstest]
