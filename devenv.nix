@@ -75,6 +75,7 @@ in {
     alejandra
     beautysh
     biome
+    bun
     deadnix
     taplo
     treefmt

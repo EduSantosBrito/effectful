@@ -1,0 +1,19 @@
+{
+  "name": "effectful-workspace",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "sandcastle": "bun .sandcastle/main.ts",
+    "sandcastle:local": "bun .sandcastle/main.ts --local"
+  },
+  "devDependencies": {
+    "@ai-hero/sandcastle": "^0.5.4",
+    "@effect/platform": "^0.95.0",
+    "@effect/platform-node": "^0.105.0",
+    "effect": "^3.21.2",
+    "typescript": "^5.9.3"
+  }
+}
