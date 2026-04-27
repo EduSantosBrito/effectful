@@ -40,9 +40,61 @@
 //!
 //! The turbofish `>>` token (as in `Vec<Vec<u8>>`) is a single `Punct` in the token stream;
 //! the angle-depth tracker does not handle it. This edge case is rare in effect call sites.
+//!
+//! ## Spike verdict
+//!
+//! Continue the macro track: representing one `bind* operand` as a tiny IR before token emission
+//! keeps the current token walk intact while giving bind lowering a named, testable boundary.
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::quote;
+
+enum BindErrorMode {
+  Propagate,
+  ReturnResult,
+}
+
+enum BindTransform {
+  PrefixBind {
+    operand: TokenStream,
+    env: syn::Ident,
+    crate_path: TokenStream,
+    error_mode: BindErrorMode,
+  },
+}
+
+impl BindTransform {
+  fn prefix(
+    operand: TokenStream,
+    env: syn::Ident,
+    crate_path: TokenStream,
+    error_mode: BindErrorMode,
+  ) -> Self {
+    Self::PrefixBind {
+      operand,
+      env,
+      crate_path,
+      error_mode,
+    }
+  }
+
+  fn into_tokens(self) -> TokenStream {
+    match self {
+      Self::PrefixBind {
+        operand,
+        env,
+        crate_path,
+        error_mode,
+      } => {
+        let await_expr = match error_mode {
+          BindErrorMode::Propagate => quote! { (#operand).__into_bind_fast(#env).await? },
+          BindErrorMode::ReturnResult => quote! { (#operand).__into_bind_fast(#env).await },
+        };
+        quote! {{ use #crate_path::IntoBindFastExt as _; #await_expr }}
+      }
+    }
+  }
+}
 
 /// Returns `true` if the `effect!` body uses effect bind (`bind*`) anywhere (including nested groups).
 ///
@@ -147,12 +199,12 @@ fn fast_bind_await(
   path: &TokenStream,
   propagate_error: bool,
 ) -> TokenStream {
-  let await_expr = if propagate_error {
-    quote! { (#operand).__into_bind_fast(#r).await? }
+  let error_mode = if propagate_error {
+    BindErrorMode::Propagate
   } else {
-    quote! { (#operand).__into_bind_fast(#r).await }
+    BindErrorMode::ReturnResult
   };
-  quote! {{ use #path::IntoBindFastExt as _; #await_expr }}
+  BindTransform::prefix(operand, r.clone(), path.clone(), error_mode).into_tokens()
 }
 
 /// When the body tail is exactly one `bind* operand` (after ident-desugar), the async effect body should
@@ -454,6 +506,23 @@ mod tests {
       let e = ($e).to_string();
       assert_eq!(a, e, "\nactual:\n{a}\n\nexpected:\n{e}\n");
     }};
+  }
+
+  #[test]
+  fn bind_transform_ir_represents_prefix_bind_before_tokens() {
+    let ir = BindTransform::prefix(
+      quote! { foo () },
+      syn::Ident::new("r_env", proc_macro2::Span::call_site()),
+      quote! { ::effectful },
+      BindErrorMode::Propagate,
+    );
+
+    let BindTransform::PrefixBind { operand, .. } = &ir;
+    assert_ts_eq!(operand.clone(), quote! { foo () });
+    assert_ts_eq!(
+      ir.into_tokens(),
+      quote! { { use ::effectful::IntoBindFastExt as _; (foo()).__into_bind_fast(r_env).await? } }
+    );
   }
 
   /// [`collect_bind_star_operand`] expects the iterator *after* the `bind*` token.
