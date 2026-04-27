@@ -23,6 +23,17 @@ impl ParseErrors {
   pub fn one(err: ParseError) -> Self {
     Self { issues: vec![err] }
   }
+
+  /// Prefix every issue path with a parent segment.
+  pub fn prefix(self, segment: &str) -> Self {
+    Self {
+      issues: self
+        .issues
+        .into_iter()
+        .map(|issue| issue.prefix(segment))
+        .collect(),
+    }
+  }
 }
 
 impl fmt::Display for ParseErrors {
@@ -62,5 +73,18 @@ mod tests {
   fn display_empty_path_omits_path_prefix() {
     let e = ParseErrors::one(ParseError::new("", "bare error"));
     assert_eq!(e.to_string(), "bare error");
+  }
+
+  #[test]
+  fn prefix_prepends_segment_to_all_issues() {
+    let e = ParseErrors::new(vec![
+      ParseError::new("a", "bad a"),
+      ParseError::new("b", "bad b"),
+    ]);
+
+    let prefixed = e.prefix("root");
+
+    assert_eq!(prefixed.issues[0].path, "root.a");
+    assert_eq!(prefixed.issues[1].path, "root.b");
   }
 }

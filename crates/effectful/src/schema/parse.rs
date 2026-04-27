@@ -10,6 +10,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use crate::schema::data::EffectData;
+use crate::schema::parse_errors::ParseErrors;
 
 /// Parse failure with a dot-separated field path (empty = root).
 #[derive(Clone, Debug, crate::EffectData)]
@@ -70,6 +71,7 @@ pub enum Unknown {
 type BoxDecode<I, A> = Arc<dyn Fn(I) -> Result<A, ParseError> + Send + Sync>;
 type BoxEncode<A, I> = Arc<dyn Fn(A) -> I + Send + Sync>;
 type BoxDecodeUnknown<A> = Arc<dyn Fn(&Unknown) -> Result<A, ParseError> + Send + Sync>;
+type BoxDecodeUnknownAll<A> = Arc<dyn Fn(&Unknown) -> Result<A, ParseErrors> + Send + Sync>;
 
 /// Bidirectional schema: semantic `A`, wire/intermediate `I`, phantom `E` ([`EffectData`] tag).
 pub struct Schema<A, I, E = ()> {
@@ -77,6 +79,7 @@ pub struct Schema<A, I, E = ()> {
   decode: BoxDecode<I, A>,
   encode: BoxEncode<A, I>,
   decode_unknown: BoxDecodeUnknown<A>,
+  decode_unknown_all: BoxDecodeUnknownAll<A>,
 }
 
 impl<A, I, E> Clone for Schema<A, I, E> {
@@ -86,6 +89,7 @@ impl<A, I, E> Clone for Schema<A, I, E> {
       decode: self.decode.clone(),
       encode: self.encode.clone(),
       decode_unknown: self.decode_unknown.clone(),
+      decode_unknown_all: self.decode_unknown_all.clone(),
     }
   }
 }
@@ -105,6 +109,11 @@ impl<A, I, E> Schema<A, I, E> {
   pub fn decode_unknown(&self, input: &Unknown) -> Result<A, ParseError> {
     (self.decode_unknown)(input)
   }
+
+  /// Decode from dynamic [`Unknown`], accumulating diagnostics where supported.
+  pub fn decode_unknown_all(&self, input: &Unknown) -> Result<A, ParseErrors> {
+    (self.decode_unknown_all)(input)
+  }
 }
 
 impl<A: 'static, I: 'static, E: EffectData + 'static> Schema<A, I, E> {
@@ -114,11 +123,27 @@ impl<A: 'static, I: 'static, E: EffectData + 'static> Schema<A, I, E> {
     encode: impl Fn(A) -> I + Send + Sync + 'static,
     decode_unknown: impl Fn(&Unknown) -> Result<A, ParseError> + Send + Sync + 'static,
   ) -> Self {
+    let decode_unknown: BoxDecodeUnknown<A> = Arc::new(decode_unknown);
+    let decode_unknown_all: BoxDecodeUnknownAll<A> = {
+      let decode_unknown = decode_unknown.clone();
+      Arc::new(move |u: &Unknown| decode_unknown(u).map_err(ParseErrors::one))
+    };
+
+    Self::make_with_decode_unknown_all(decode, encode, decode_unknown, decode_unknown_all)
+  }
+
+  fn make_with_decode_unknown_all(
+    decode: impl Fn(I) -> Result<A, ParseError> + Send + Sync + 'static,
+    encode: impl Fn(A) -> I + Send + Sync + 'static,
+    decode_unknown: BoxDecodeUnknown<A>,
+    decode_unknown_all: BoxDecodeUnknownAll<A>,
+  ) -> Self {
     Self {
       phantom: PhantomData,
       decode: Arc::new(decode),
       encode: Arc::new(encode),
-      decode_unknown: Arc::new(decode_unknown),
+      decode_unknown,
+      decode_unknown_all,
     }
   }
 }
@@ -489,31 +514,69 @@ where
   let s0_d = s0.clone();
   let s0_e = s0.clone();
   let s0_u = s0.clone();
+  let s0_all = s0.clone();
   let s1_d = s1.clone();
   let s1_e = s1.clone();
   let s1_u = s1.clone();
-  Schema::make(
+  let s1_all = s1.clone();
+  let decode_unknown: BoxDecodeUnknown<(A0, A1)> = Arc::new(move |u| {
+    let obj = match u {
+      Unknown::Object(m) => m,
+      _ => return Err(ParseError::new("", "expected object")),
+    };
+    let u0 = obj
+      .get(name0)
+      .ok_or_else(|| ParseError::new(name0, format!("missing field {name0}")))?;
+    let a0 = s0_u.decode_unknown(u0).map_err(|e| e.prefix(name0))?;
+    let u1 = obj
+      .get(name1)
+      .ok_or_else(|| ParseError::new(name1, format!("missing field {name1}")))?;
+    let a1 = s1_u.decode_unknown(u1).map_err(|e| e.prefix(name1))?;
+    Ok((a0, a1))
+  });
+  Schema::make_with_decode_unknown_all(
     move |(i0, i1)| {
       let a0 = s0_d.decode(i0).map_err(|e| e.prefix(name0))?;
       let a1 = s1_d.decode(i1).map_err(|e| e.prefix(name1))?;
       Ok((a0, a1))
     },
     move |(a0, a1)| (s0_e.encode(a0), s1_e.encode(a1)),
-    move |u| {
+    decode_unknown,
+    Arc::new(move |u| {
       let obj = match u {
         Unknown::Object(m) => m,
-        _ => return Err(ParseError::new("", "expected object")),
+        _ => return Err(ParseErrors::one(ParseError::new("", "expected object"))),
       };
-      let u0 = obj
-        .get(name0)
-        .ok_or_else(|| ParseError::new(name0, format!("missing field {name0}")))?;
-      let a0 = s0_u.decode_unknown(u0).map_err(|e| e.prefix(name0))?;
-      let u1 = obj
-        .get(name1)
-        .ok_or_else(|| ParseError::new(name1, format!("missing field {name1}")))?;
-      let a1 = s1_u.decode_unknown(u1).map_err(|e| e.prefix(name1))?;
-      Ok((a0, a1))
-    },
+
+      let r0 = match obj.get(name0) {
+        Some(u0) => s0_all.decode_unknown_all(u0).map_err(|e| e.prefix(name0)),
+        None => Err(ParseErrors::one(ParseError::new(
+          name0,
+          format!("missing field {name0}"),
+        ))),
+      };
+      let r1 = match obj.get(name1) {
+        Some(u1) => s1_all.decode_unknown_all(u1).map_err(|e| e.prefix(name1)),
+        None => Err(ParseErrors::one(ParseError::new(
+          name1,
+          format!("missing field {name1}"),
+        ))),
+      };
+
+      match (r0, r1) {
+        (Ok(a0), Ok(a1)) => Ok((a0, a1)),
+        (left, right) => {
+          let mut issues = Vec::new();
+          if let Err(err) = left {
+            issues.extend(err.issues);
+          }
+          if let Err(err) = right {
+            issues.extend(err.issues);
+          }
+          Err(ParseErrors::new(issues))
+        }
+      }
+    }),
   )
 }
 
@@ -749,6 +812,22 @@ mod tests {
         "path {:?} should mention user and zip",
         err.path
       );
+    }
+
+    #[test]
+    fn decode_unknown_all_when_multiple_fields_invalid_returns_all_paths() {
+      let s = person_schema();
+      let mut m = BTreeMap::new();
+      m.insert("name".into(), Unknown::I64(1));
+      m.insert("age".into(), Unknown::String("old".into()));
+
+      let err = s
+        .decode_unknown_all(&Unknown::Object(m))
+        .expect_err("both fields should fail");
+
+      assert_eq!(err.issues.len(), 2);
+      assert_eq!(err.issues[0].path, "name");
+      assert_eq!(err.issues[1].path, "age");
     }
   }
 
