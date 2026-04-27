@@ -278,9 +278,13 @@ impl Schedule {
   where
     C: Clock + Clone + 'static,
   {
-    self
-      .next(input)
-      .map(|decision| clock.clone().sleep(decision.delay))
+    self.next(input).map(|decision| {
+      if let Some(test_clock) = crate::testing::test_runtime::current_test_clock() {
+        test_clock.sleep(decision.delay)
+      } else {
+        clock.clone().sleep(decision.delay)
+      }
+    })
   }
 }
 

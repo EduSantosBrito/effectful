@@ -36,12 +36,35 @@
 use crate::layer::Layer;
 use crate::runtime::Never;
 use crate::{Effect, Exit, ServiceContext, TestClock};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fmt::Debug;
 
 thread_local! {
   static LEAKED_FIBERS: Cell<usize> = const { Cell::new(0) };
   static UNCLOSED_SCOPES: Cell<usize> = const { Cell::new(0) };
+  static ACTIVE_TEST_CLOCK: RefCell<Option<TestClock>> = const { RefCell::new(None) };
+}
+
+struct TestClockScope {
+  previous: Option<TestClock>,
+}
+
+impl Drop for TestClockScope {
+  fn drop(&mut self) {
+    let previous = self.previous.clone();
+    ACTIVE_TEST_CLOCK.with(|clock| {
+      *clock.borrow_mut() = previous;
+    });
+  }
+}
+
+fn install_test_clock(clock: TestClock) -> TestClockScope {
+  let previous = ACTIVE_TEST_CLOCK.with(|active| active.borrow_mut().replace(clock));
+  TestClockScope { previous }
+}
+
+pub(crate) fn current_test_clock() -> Option<TestClock> {
+  ACTIVE_TEST_CLOCK.with(|clock| clock.borrow().clone())
 }
 
 fn reset_counters() {
@@ -237,24 +260,24 @@ where
 
 /// Run an effect in deterministic test mode with an explicit test clock.
 #[inline]
-pub fn run_test_with_clock<A, E, R>(
-  effect: Effect<A, E, R>,
-  env: R,
-  _clock: TestClock,
-) -> Exit<A, E>
+pub fn run_test_with_clock<A, E, R>(effect: Effect<A, E, R>, env: R, clock: TestClock) -> Exit<A, E>
 where
   A: 'static,
   E: 'static,
   R: 'static,
 {
+  let _scope = install_test_clock(clock);
   run_test(effect, env)
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::{MissingService, Service, fail, succeed};
+  use crate::scheduling::duration::duration;
+  use crate::{MissingService, Schedule, Service, fail, retry, succeed};
   use rstest::rstest;
+  use std::sync::Arc;
+  use std::sync::atomic::{AtomicUsize, Ordering};
 
   #[derive(Clone, Debug, PartialEq, Service)]
   struct TestService {
@@ -304,6 +327,36 @@ mod tests {
       let clock = TestClock::new(std::time::Instant::now());
       let exit = run_test_with_clock(effect, (), clock);
       assert_eq!(exit, Exit::succeed(value));
+    }
+
+    #[test]
+    fn run_test_with_clock_drives_retry_schedule_sleep_without_wall_clock_wait() {
+      let start = std::time::Instant::now();
+      let clock = TestClock::new(start);
+      let attempts = Arc::new(AtomicUsize::new(0));
+      let attempts_c = Arc::clone(&attempts);
+      let effect = retry(
+        move || {
+          let attempt = attempts_c.fetch_add(1, Ordering::SeqCst);
+          if attempt == 0 {
+            fail::<usize, &'static str, ()>("boom")
+          } else {
+            succeed::<usize, &'static str, ()>(attempt + 1)
+          }
+        },
+        Schedule::spaced(duration::millis(50)).compose(Schedule::recurs(1)),
+      );
+
+      let before = std::time::Instant::now();
+      let exit = run_test_with_clock(effect, (), clock.clone());
+      let elapsed = before.elapsed();
+
+      assert_eq!(exit, Exit::succeed(2));
+      assert!(
+        elapsed < duration::millis(25),
+        "retry waited on wall clock for {elapsed:?}"
+      );
+      assert_eq!(clock.pending_sleeps(), vec![start + duration::millis(50)]);
     }
   }
 
