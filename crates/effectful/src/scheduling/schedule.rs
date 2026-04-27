@@ -40,6 +40,79 @@ type DelayMap = Arc<dyn Fn(Duration) -> Duration + Send + Sync>;
 type InputMap = Arc<dyn Fn(ScheduleInput) -> ScheduleInput + Send + Sync>;
 type SchedulePred = Arc<dyn Fn(&ScheduleInput) -> bool + Send + Sync>;
 
+struct ScheduleInterpreter<C> {
+  schedule: Schedule,
+  clock: C,
+  interrupt: Option<CancellationToken>,
+  attempt_counter: Option<Metric<u64, ()>>,
+  attempt: u64,
+}
+
+enum InterruptTiming {
+  BeforeSchedule,
+  AfterSchedule,
+}
+
+impl<C> ScheduleInterpreter<C>
+where
+  C: Clock + Clone + 'static,
+{
+  fn new(
+    schedule: Schedule,
+    clock: C,
+    interrupt: Option<CancellationToken>,
+    attempt_counter: Option<Metric<u64, ()>>,
+  ) -> Self {
+    Self {
+      schedule,
+      clock,
+      interrupt,
+      attempt_counter,
+      attempt: 0,
+    }
+  }
+
+  async fn record_attempt(&self) {
+    if let Some(ref c) = self.attempt_counter {
+      match c.apply(1).run(&mut ()).await {
+        Ok(()) => {}
+        Err(never) => match never {},
+      }
+    }
+  }
+
+  async fn is_interrupted(&self) -> bool {
+    let Some(token) = &self.interrupt else {
+      return false;
+    };
+    match check_interrupt(token).run(&mut ()).await {
+      Ok(is_interrupted) => is_interrupted,
+      Err(never) => match never {},
+    }
+  }
+
+  async fn sleep_before_next_attempt(&mut self, interrupt_timing: InterruptTiming) -> bool {
+    if matches!(interrupt_timing, InterruptTiming::BeforeSchedule) && self.is_interrupted().await {
+      return false;
+    }
+    let input = ScheduleInput {
+      attempt: self.attempt,
+    };
+    let Some(sleep_effect) = self.schedule.next_sleep(&self.clock, input) else {
+      return false;
+    };
+    if matches!(interrupt_timing, InterruptTiming::AfterSchedule) && self.is_interrupted().await {
+      return false;
+    }
+    match sleep_effect.run(&mut ()).await {
+      Ok(()) => {}
+      Err(never) => match never {},
+    }
+    self.attempt = self.attempt.saturating_add(1);
+    true
+  }
+}
+
 /// Scheduling policy for [`repeat`] / [`retry`].
 ///
 /// `Predicate`- and `Arc`-backed variants are not compared for equality; use runtime behavior via [`Schedule::next`].
@@ -309,7 +382,7 @@ where
 /// Repeat using an explicit clock service so delay handling is runtime-mediated and non-blocking.
 pub fn repeat_with_clock<A, E, R, F, C>(
   mut make: F,
-  mut schedule: Schedule,
+  schedule: Schedule,
   clock: C,
   attempt_counter: Option<Metric<u64, ()>>,
 ) -> Effect<A, E, R>
@@ -321,29 +394,16 @@ where
   C: Clock + Clone + 'static,
 {
   Effect::new_async(move |r: &mut R| {
-    let clock = clock.clone();
+    let mut interpreter = ScheduleInterpreter::new(schedule, clock, None, attempt_counter);
     Box::pin(async move {
-      let mut attempt = 0_u64;
-      if let Some(ref c) = attempt_counter {
-        match c.apply(1).run(&mut ()).await {
-          Ok(()) => {}
-          Err(never) => match never {},
-        }
-      }
+      interpreter.record_attempt().await;
       let mut last = make().run(r).await?;
-      while let Some(sleep_effect) = schedule.next_sleep(&clock, ScheduleInput { attempt }) {
-        match sleep_effect.run(&mut ()).await {
-          Ok(()) => {}
-          Err(never) => match never {},
-        }
-        if let Some(ref c) = attempt_counter {
-          match c.apply(1).run(&mut ()).await {
-            Ok(()) => {}
-            Err(never) => match never {},
-          }
-        }
+      while interpreter
+        .sleep_before_next_attempt(InterruptTiming::AfterSchedule)
+        .await
+      {
+        interpreter.record_attempt().await;
         last = make().run(r).await?;
-        attempt = attempt.saturating_add(1);
       }
       Ok(last)
     })
@@ -353,7 +413,7 @@ where
 /// Repeat using an explicit clock and interruption token.
 pub fn repeat_with_clock_and_interrupt<A, E, R, F, C>(
   mut make: F,
-  mut schedule: Schedule,
+  schedule: Schedule,
   clock: C,
   token: CancellationToken,
   attempt_counter: Option<Metric<u64, ()>>,
@@ -366,37 +426,16 @@ where
   C: Clock + Clone + 'static,
 {
   Effect::new_async(move |r: &mut R| {
-    let clock = clock.clone();
-    let token = token.clone();
+    let mut interpreter = ScheduleInterpreter::new(schedule, clock, Some(token), attempt_counter);
     Box::pin(async move {
-      let mut attempt = 0_u64;
-      if let Some(ref c) = attempt_counter {
-        match c.apply(1).run(&mut ()).await {
-          Ok(()) => {}
-          Err(never) => match never {},
-        }
-      }
+      interpreter.record_attempt().await;
       let mut last = make().run(r).await?;
-      while let Some(sleep_effect) = schedule.next_sleep(&clock, ScheduleInput { attempt }) {
-        let interrupted = match check_interrupt(&token).run(&mut ()).await {
-          Ok(is_interrupted) => is_interrupted,
-          Err(never) => match never {},
-        };
-        if interrupted {
-          break;
-        }
-        match sleep_effect.run(&mut ()).await {
-          Ok(()) => {}
-          Err(never) => match never {},
-        }
-        if let Some(ref c) = attempt_counter {
-          match c.apply(1).run(&mut ()).await {
-            Ok(()) => {}
-            Err(never) => match never {},
-          }
-        }
+      while interpreter
+        .sleep_before_next_attempt(InterruptTiming::AfterSchedule)
+        .await
+      {
+        interpreter.record_attempt().await;
         last = make().run(r).await?;
-        attempt = attempt.saturating_add(1);
       }
       Ok(last)
     })
@@ -417,7 +456,7 @@ where
 /// Retry using an explicit clock service for runtime-mediated delays.
 pub fn retry_with_clock<A, E, R, F, C>(
   mut make: F,
-  mut schedule: Schedule,
+  schedule: Schedule,
   clock: C,
   attempt_counter: Option<Metric<u64, ()>>,
 ) -> Effect<A, E, R>
@@ -429,28 +468,20 @@ where
   C: Clock + Clone + 'static,
 {
   Effect::new_async(move |r: &mut R| {
-    let clock = clock.clone();
+    let mut interpreter = ScheduleInterpreter::new(schedule, clock, None, attempt_counter);
     Box::pin(async move {
-      let mut attempt = 0_u64;
       loop {
-        if let Some(ref c) = attempt_counter {
-          match c.apply(1).run(&mut ()).await {
-            Ok(()) => {}
-            Err(never) => match never {},
-          }
-        }
+        interpreter.record_attempt().await;
         match make().run(r).await {
           Ok(a) => return Ok(a),
-          Err(e) => match schedule.next_sleep(&clock, ScheduleInput { attempt }) {
-            Some(sleep_effect) => {
-              match sleep_effect.run(&mut ()).await {
-                Ok(()) => {}
-                Err(never) => match never {},
-              }
-              attempt = attempt.saturating_add(1);
+          Err(e) => {
+            if !interpreter
+              .sleep_before_next_attempt(InterruptTiming::AfterSchedule)
+              .await
+            {
+              return Err(e);
             }
-            None => return Err(e),
-          },
+          }
         }
       }
     })
@@ -460,7 +491,7 @@ where
 /// Retry using an explicit clock and interruption token.
 pub fn retry_with_clock_and_interrupt<A, E, R, F, C>(
   mut make: F,
-  mut schedule: Schedule,
+  schedule: Schedule,
   clock: C,
   token: CancellationToken,
   attempt_counter: Option<Metric<u64, ()>>,
@@ -473,36 +504,18 @@ where
   C: Clock + Clone + 'static,
 {
   Effect::new_async(move |r: &mut R| {
-    let clock = clock.clone();
-    let token = token.clone();
+    let mut interpreter = ScheduleInterpreter::new(schedule, clock, Some(token), attempt_counter);
     Box::pin(async move {
-      let mut attempt = 0_u64;
       loop {
-        if let Some(ref c) = attempt_counter {
-          match c.apply(1).run(&mut ()).await {
-            Ok(()) => {}
-            Err(never) => match never {},
-          }
-        }
+        interpreter.record_attempt().await;
         match make().run(r).await {
           Ok(a) => return Ok(a),
           Err(e) => {
-            let interrupted = match check_interrupt(&token).run(&mut ()).await {
-              Ok(is_interrupted) => is_interrupted,
-              Err(never) => match never {},
-            };
-            if interrupted {
+            if !interpreter
+              .sleep_before_next_attempt(InterruptTiming::BeforeSchedule)
+              .await
+            {
               return Err(e);
-            }
-            match schedule.next_sleep(&clock, ScheduleInput { attempt }) {
-              Some(sleep_effect) => {
-                match sleep_effect.run(&mut ()).await {
-                  Ok(()) => {}
-                  Err(never) => match never {},
-                }
-                attempt = attempt.saturating_add(1);
-              }
-              None => return Err(e),
             }
           }
         }
@@ -1033,6 +1046,28 @@ mod tests {
       );
       assert_eq!(block_on(eff.run(&mut ())), Err("boom"));
       assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn retry_with_interrupt_token_does_not_advance_schedule_when_already_cancelled() {
+      let token = CancellationToken::new();
+      token.cancel();
+      let predicate_calls = Arc::new(AtomicUsize::new(0));
+      let predicate_calls_c = Arc::clone(&predicate_calls);
+      let schedule = Schedule::recurs_while(Box::new(move |_| {
+        predicate_calls_c.fetch_add(1, Ordering::SeqCst);
+        true
+      }));
+      let eff = retry_with_clock_and_interrupt(
+        || fail::<(), &'static str, ()>("boom"),
+        schedule,
+        TestClock::new(std::time::Instant::now()),
+        token,
+        None,
+      );
+
+      assert_eq!(block_on(eff.run(&mut ())), Err("boom"));
+      assert_eq!(predicate_calls.load(Ordering::SeqCst), 0);
     }
   }
 }
