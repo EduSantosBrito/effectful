@@ -20,10 +20,59 @@ use crate::runtime::CancellationToken;
 use crate::{Chunk, Effect, Or, Predicate};
 use core::any::Any;
 use core::fmt;
+use core::marker::PhantomData;
 use futures::stream::{self, StreamExt};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+trait PullStream<A, E, R>
+where
+  A: Send + 'static,
+  E: Send + 'static,
+  R: 'static,
+{
+  fn poll_next_chunk_with_size<'a>(
+    &'a mut self,
+    env: &'a mut R,
+    chunk_size: usize,
+  ) -> crate::kernel::BoxFuture<'a, Result<Option<Chunk<A>>, E>>;
+}
+
+struct MapPull<A, B, E, R, F>
+where
+  A: Send + 'static,
+  B: Send + 'static,
+  E: Send + 'static,
+  R: 'static,
+{
+  upstream: Stream<A, E, R>,
+  f: F,
+  _output: PhantomData<B>,
+}
+
+impl<A, B, E, R, F> PullStream<B, E, R> for MapPull<A, B, E, R, F>
+where
+  A: Send + 'static,
+  B: Send + 'static,
+  E: Send + 'static,
+  R: 'static,
+  F: FnMut(A) -> B + 'static,
+{
+  fn poll_next_chunk_with_size<'a>(
+    &'a mut self,
+    env: &'a mut R,
+    chunk_size: usize,
+  ) -> crate::kernel::BoxFuture<'a, Result<Option<Chunk<B>>, E>> {
+    Box::pin(async move {
+      let chunk = self
+        .upstream
+        .poll_next_chunk_with_size(env, chunk_size)
+        .await?;
+      Ok(chunk.map(|items| items.map(&mut self.f)))
+    })
+  }
+}
 
 /// Ordered window-start → aggregation state, for time-keyed stream operators (tumbling / sliding).
 pub type TimeBucketMap<A> = EffectSortedMap<Instant, A>;
@@ -59,6 +108,7 @@ where
     scope: Option<Scope>,
     shared_fail: Arc<Mutex<Option<E>>>,
   },
+  Pull(Box<dyn PullStream<A, E, R>>),
   Buffered(VecDeque<A>),
   Exhausted,
 }
@@ -191,6 +241,13 @@ where
   {
     Self {
       state: Arc::new(Mutex::new(StreamState::Pending(Some(Box::new(f))))),
+      throughput: None,
+    }
+  }
+
+  fn from_pull(pull: impl PullStream<A, E, R> + 'static) -> Self {
+    Self {
+      state: Arc::new(Mutex::new(StreamState::Pull(Box::new(pull)))),
       throughput: None,
     }
   }
@@ -329,6 +386,23 @@ where
               }
             }
             return Ok(Some(Chunk::from_vec(out)));
+          }
+          StreamState::Pull(pull) => {
+            let out = pull.poll_next_chunk_with_size(env, chunk_size).await?;
+            if out.is_none() {
+              *guard = StreamState::Exhausted;
+            }
+            let Some(chunk) = out else {
+              return Ok(None);
+            };
+            let n = chunk.len() as u64;
+            if let Some(m) = &throughput {
+              match m.apply(n).run(&mut ()).await {
+                Ok(()) => {}
+                Err(never) => match never {},
+              }
+            }
+            return Ok(Some(chunk));
           }
           StreamState::Buffered(items) => {
             if items.is_empty() {
@@ -565,25 +639,17 @@ where
     })
   }
 
-  /// Maps each element (pulls upstream to completion, then emits mapped chunks).
+  /// Maps each element while preserving upstream pull boundaries.
   #[inline]
-  pub fn map<B, F>(self, mut f: F) -> Stream<B, E, R>
+  pub fn map<B, F>(self, f: F) -> Stream<B, E, R>
   where
     B: Send + 'static,
     F: FnMut(A) -> B + 'static,
   {
-    Stream::new(move |r: &mut R| {
-      Box::pin(async move {
-        let mut upstream = self;
-        let mut out = Vec::new();
-        loop {
-          let Some(chunk) = upstream.poll_next_chunk(r).await? else {
-            break;
-          };
-          out.extend(chunk.map(&mut f).into_vec());
-        }
-        Ok(out)
-      })
+    Stream::from_pull(MapPull {
+      upstream: self,
+      f,
+      _output: PhantomData,
     })
   }
 
@@ -1431,6 +1497,21 @@ mod tests {
         .take(3);
       let out = block_on(stream.run_collect().run(&mut ()));
       assert_eq!(out, Ok(vec![20, 40, 60]));
+    }
+
+    #[test]
+    fn map_poll_next_chunk_pulls_upstream_incrementally() {
+      let upstream_pulls = Metric::counter("map_lazy_upstream_pulls", []);
+      let mut stream = Stream::from_iterable(0..1_000)
+        .with_throughput_metric(upstream_pulls.clone())
+        .map(|n| n + 1);
+      let mut env = ();
+
+      assert_eq!(
+        block_on(stream.poll_next_chunk_with_size(&mut env, 1)),
+        Ok(Some(Chunk::from_vec(vec![1])))
+      );
+      assert_eq!(upstream_pulls.snapshot_count(), 1);
     }
 
     #[test]
