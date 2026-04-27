@@ -116,16 +116,16 @@ pub use layer::{
 };
 pub use observability::{
   __effectful_span_lazy, __effectful_span_lazy_scoped, AnnotateCurrentSpanErr,
-  AnnotateCurrentSpanSuccess, EffectEvent, FiberEvent, LogSpan, Metric,
+  AnnotateCurrentSpanSuccess, EffectEvent, FiberEvent, GlobalTraceCollector, LogSpan, Metric,
   SequentialTraceContextProvider, SpanAttributeValue, SpanContext, SpanEvent, SpanId, SpanLevel,
-  SpanOptions, SpanRecord, SpanStatus, TraceContextProvider, TraceFlags, TraceId,
+  SpanOptions, SpanRecord, SpanStatus, TraceCollector, TraceContextProvider, TraceFlags, TraceId,
   TraceParentParseError, TracingConfig, TracingFiberRefs, TracingSnapshot, annotate_current_span,
   annotate_current_span_attribute, emit_current_span_event,
   emit_current_span_event_with_attributes, emit_effect_event, emit_fiber_event,
   install_tracing_layer, install_tracing_layer_with_clock,
   install_tracing_layer_with_context_provider,
   install_tracing_layer_with_context_provider_and_clock, metric_make, snapshot_tracing,
-  tracing_enabled, with_span, with_span_options,
+  tracing_enabled, with_span, with_span_options, with_span_options_collected,
 };
 pub use resource::{Cache, CacheStats, Finalizer, KeyedPool, Pool, Scope};
 pub use runtime::{

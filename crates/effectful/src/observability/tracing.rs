@@ -574,6 +574,100 @@ pub struct TracingSnapshot {
   pub spans: Vec<SpanRecord>,
 }
 
+/// Receives tracing lifecycle records.
+pub trait TraceCollector: Send + Sync + 'static {
+  /// Records a span start.
+  fn span_started(&self, span: SpanRecord);
+  /// Records a span completion.
+  fn span_ended(
+    &self,
+    span_id: SpanId,
+    attributes: EffectHashMap<String, SpanAttributeValue>,
+    status: SpanStatus,
+    ended_at: Instant,
+  );
+  /// Records an event emitted on a span.
+  fn span_event(
+    &self,
+    span_id: SpanId,
+    name: String,
+    attributes: EffectHashMap<String, SpanAttributeValue>,
+    occurred_at: Instant,
+  );
+  /// Records an effect lifecycle event.
+  fn effect_event(&self, event: EffectEvent);
+  /// Records a fiber lifecycle event.
+  fn fiber_event(&self, event: FiberEvent);
+}
+
+/// Default collector adapter backed by the installed global tracing state.
+#[derive(Debug, Default)]
+pub struct GlobalTraceCollector;
+
+impl TraceCollector for GlobalTraceCollector {
+  fn span_started(&self, span: SpanRecord) {
+    with_state_mut(|state| {
+      state.spans.push(span);
+    });
+  }
+
+  fn span_ended(
+    &self,
+    span_id: SpanId,
+    attributes: EffectHashMap<String, SpanAttributeValue>,
+    status: SpanStatus,
+    ended_at: Instant,
+  ) {
+    with_state_mut(|state| {
+      if let Some(span) = state
+        .spans
+        .iter_mut()
+        .rev()
+        .find(|span| span.context.span_id == span_id)
+      {
+        span.attributes = attributes;
+        span.status = status;
+        span.ended_at = Some(ended_at);
+      }
+    });
+  }
+
+  fn span_event(
+    &self,
+    span_id: SpanId,
+    name: String,
+    attributes: EffectHashMap<String, SpanAttributeValue>,
+    occurred_at: Instant,
+  ) {
+    with_state_mut(|state| {
+      if let Some(span) = state
+        .spans
+        .iter_mut()
+        .rev()
+        .find(|span| span.context.span_id == span_id)
+      {
+        span.events.push(SpanEvent {
+          name,
+          attributes,
+          occurred_at,
+        });
+      }
+    });
+  }
+
+  fn effect_event(&self, event: EffectEvent) {
+    with_state_mut(|state| {
+      state.effect_events.push(event);
+    });
+  }
+
+  fn fiber_event(&self, event: FiberEvent) {
+    with_state_mut(|state| {
+      state.fiber_events.push(event);
+    });
+  }
+}
+
 struct TraceState {
   config: TracingConfig,
   effect_events: Vec<EffectEvent>,
@@ -867,6 +961,33 @@ pub(crate) fn fiber_refs() -> Option<&'static TracingFiberRefs> {
   TRACING_FIBER_REFS.get()
 }
 
+fn ensure_tracing_fiber_refs() -> &'static TracingFiberRefs {
+  TRACING_FIBER_REFS.get_or_init(|| {
+    let span_stack = run_blocking(
+      FiberRef::make_with(
+        Vec::<LogSpan>::new,
+        |_parent| Vec::new(),
+        |parent, _child| parent.clone(),
+      ),
+      (),
+    )
+    .expect("tracing span_stack FiberRef");
+    let span_annotations = run_blocking(
+      FiberRef::make_with(
+        hash_map::empty::<String, SpanAttributeValue>,
+        |_parent| hash_map::empty(),
+        |parent, _child| parent.clone(),
+      ),
+      (),
+    )
+    .expect("tracing span_annotations FiberRef");
+    TracingFiberRefs {
+      span_stack,
+      span_annotations,
+    }
+  })
+}
+
 fn with_state_mut<F>(f: F)
 where
   F: FnOnce(&mut TraceState),
@@ -878,17 +999,6 @@ where
   f(&mut guard);
 }
 
-fn next_span_context(parent: Option<SpanContext>) -> Option<SpanContext> {
-  let guard = trace_state().lock().expect("trace state mutex poisoned");
-  if !guard.config.enabled {
-    return None;
-  }
-  Some(match parent {
-    Some(parent) => guard.context_provider.child_context(&parent),
-    None => guard.context_provider.root_context(),
-  })
-}
-
 fn tracing_now() -> Instant {
   let clock_now = {
     let guard = trace_state().lock().expect("trace state mutex poisoned");
@@ -897,45 +1007,33 @@ fn tracing_now() -> Instant {
   clock_now()
 }
 
-fn record_span_start(
+fn tracing_context_provider() -> Arc<dyn TraceContextProvider> {
+  let guard = trace_state().lock().expect("trace state mutex poisoned");
+  Arc::clone(&guard.context_provider)
+}
+
+fn tracing_clock_now() -> Arc<dyn Fn() -> Instant + Send + Sync> {
+  let guard = trace_state().lock().expect("trace state mutex poisoned");
+  Arc::clone(&guard.clock_now)
+}
+
+fn make_span_record(
   options: &SpanOptions,
   context: SpanContext,
   parent_span_id: Option<SpanId>,
   started_at: Instant,
-) {
-  with_state_mut(|state| {
-    state.spans.push(SpanRecord {
-      name: options.name.to_string(),
-      context,
-      parent_span_id,
-      level: options.level,
-      status: SpanStatus::Unset,
-      attributes: options.attributes.clone(),
-      events: Vec::new(),
-      started_at,
-      ended_at: None,
-    });
-  });
-}
-
-fn record_span_end(
-  span_id: SpanId,
-  attributes: EffectHashMap<String, SpanAttributeValue>,
-  status: SpanStatus,
-  ended_at: Instant,
-) {
-  with_state_mut(|state| {
-    if let Some(span) = state
-      .spans
-      .iter_mut()
-      .rev()
-      .find(|span| span.context.span_id == span_id)
-    {
-      span.attributes = attributes;
-      span.status = status;
-      span.ended_at = Some(ended_at);
-    }
-  });
+) -> SpanRecord {
+  SpanRecord {
+    name: options.name.to_string(),
+    context,
+    parent_span_id,
+    level: options.level,
+    status: SpanStatus::Unset,
+    attributes: options.attributes.clone(),
+    events: Vec::new(),
+    started_at,
+    ended_at: None,
+  }
 }
 
 fn record_span_event(
@@ -944,26 +1042,11 @@ fn record_span_event(
   attributes: EffectHashMap<String, SpanAttributeValue>,
   occurred_at: Instant,
 ) {
-  with_state_mut(|state| {
-    if let Some(span) = state
-      .spans
-      .iter_mut()
-      .rev()
-      .find(|span| span.context.span_id == span_id)
-    {
-      span.events.push(SpanEvent {
-        name,
-        attributes,
-        occurred_at,
-      });
-    }
-  });
+  GlobalTraceCollector.span_event(span_id, name, attributes, occurred_at);
 }
 
 fn record_effect_event(event: EffectEvent) {
-  with_state_mut(|state| {
-    state.effect_events.push(event);
-  });
+  GlobalTraceCollector.effect_event(event);
 }
 
 /// Installs fiber refs and replaces global trace buffers; clears prior events.
@@ -1020,30 +1103,7 @@ fn install_tracing_layer_with_context_provider_and_clock_fn(
   clock_now: Arc<dyn Fn() -> Instant + Send + Sync>,
 ) -> Effect<(), Never, ()> {
   Effect::new(move |_env| {
-    TRACING_FIBER_REFS.get_or_init(|| {
-      let span_stack = run_blocking(
-        FiberRef::make_with(
-          Vec::<LogSpan>::new,
-          |_parent| Vec::new(),
-          |parent, _child| parent.clone(),
-        ),
-        (),
-      )
-      .expect("tracing span_stack FiberRef");
-      let span_annotations = run_blocking(
-        FiberRef::make_with(
-          hash_map::empty::<String, SpanAttributeValue>,
-          |_parent| hash_map::empty(),
-          |parent, _child| parent.clone(),
-        ),
-        (),
-      )
-      .expect("tracing span_annotations FiberRef");
-      TracingFiberRefs {
-        span_stack,
-        span_annotations,
-      }
-    });
+    ensure_tracing_fiber_refs();
     let mut guard = trace_state().lock().expect("trace state mutex poisoned");
     guard.config = config.clone();
     let subscriber_available =
@@ -1072,9 +1132,7 @@ pub fn emit_effect_event(event: EffectEvent) -> Effect<(), Never, ()> {
 /// Appends a fiber lifecycle event when tracing is enabled.
 pub fn emit_fiber_event(event: FiberEvent) -> Effect<(), Never, ()> {
   Effect::new(move |_env| {
-    with_state_mut(|state| {
-      state.fiber_events.push(event.clone());
-    });
+    GlobalTraceCollector.fiber_event(event.clone());
     Ok(())
   })
 }
@@ -1226,6 +1284,48 @@ where
   })
 }
 
+/// Runs `effect` inside a span recorded by an injected collector.
+pub fn with_span_options_collected<A, E, R>(
+  effect: Effect<A, E, R>,
+  options: SpanOptions,
+  collector: Arc<dyn TraceCollector>,
+) -> Effect<A, E, R>
+where
+  A: 'static,
+  E: 'static,
+  R: 'static,
+{
+  with_span_options_collected_with_providers(
+    effect,
+    options,
+    collector,
+    Arc::new(SequentialTraceContextProvider::new()),
+    Arc::new(Instant::now),
+  )
+}
+
+fn with_span_options_collected_with_providers<A, E, R>(
+  effect: Effect<A, E, R>,
+  options: SpanOptions,
+  collector: Arc<dyn TraceCollector>,
+  context_provider: Arc<dyn TraceContextProvider>,
+  clock_now: Arc<dyn Fn() -> Instant + Send + Sync>,
+) -> Effect<A, E, R>
+where
+  A: 'static,
+  E: 'static,
+  R: 'static,
+{
+  with_span_options_enabled_with_collector(
+    effect,
+    options,
+    collector,
+    context_provider,
+    clock_now,
+    false,
+  )
+}
+
 #[doc(hidden)]
 pub fn __effectful_span_lazy<A, E, R, F, O>(
   body: F,
@@ -1356,25 +1456,59 @@ where
   E: 'static,
   R: 'static,
 {
+  with_span_options_enabled_with_collector(
+    effect,
+    options,
+    Arc::new(GlobalTraceCollector),
+    tracing_context_provider(),
+    tracing_clock_now(),
+    true,
+  )
+}
+
+fn with_span_options_enabled_with_collector<A, E, R>(
+  effect: Effect<A, E, R>,
+  options: SpanOptions,
+  collector: Arc<dyn TraceCollector>,
+  context_provider: Arc<dyn TraceContextProvider>,
+  clock_now: Arc<dyn Fn() -> Instant + Send + Sync>,
+  bridge_to_tracing: bool,
+) -> Effect<A, E, R>
+where
+  A: 'static,
+  E: 'static,
+  R: 'static,
+{
   Effect::new_async(move |env: &mut R| {
     let options = options.clone();
+    let collector = Arc::clone(&collector);
+    let context_provider = Arc::clone(&context_provider);
+    let clock_now = Arc::clone(&clock_now);
     box_future(async move {
-      if tracing_mode().is_disabled() {
+      if bridge_to_tracing && tracing_mode().is_disabled() {
         return effect.run(env).await;
       }
-      let Some(refs) = fiber_refs().cloned() else {
-        return effect.run(env).await;
-      };
+      let refs = ensure_tracing_fiber_refs().clone();
       let stack = run_blocking(refs.span_stack.get(), ()).expect("span_stack get");
       let parent_context = stack.last().map(|span| span.context);
-      let Some(context) = next_span_context(parent_context) else {
-        return effect.run(env).await;
+      let context = match parent_context {
+        Some(parent) => context_provider.child_context(&parent),
+        None => context_provider.root_context(),
       };
-      let started_at = tracing_now();
+      let started_at = clock_now();
       let parent_span_id = parent_context.map(|parent| parent.span_id);
-      let tracing_span = make_tracing_span(&options, context, parent_span_id);
-      record_span_start(&options, context, parent_span_id, started_at);
-      record_effect_event(EffectEvent::Start {
+      let tracing_span = if bridge_to_tracing {
+        make_tracing_span(&options, context, parent_span_id)
+      } else {
+        None
+      };
+      collector.span_started(make_span_record(
+        &options,
+        context,
+        parent_span_id,
+        started_at,
+      ));
+      collector.effect_event(EffectEvent::Start {
         span: options.name.to_string(),
       });
 
@@ -1402,16 +1536,18 @@ where
         let span_name = span_name_inner.clone();
         let refs = refs_for_inner.clone();
         let tracing_span = tracing_span_for_inner.clone();
+        let collector = Arc::clone(&collector);
+        let clock_now = Arc::clone(&clock_now);
         box_future(async move {
           let out = effect.run(env).await;
-          if tracing_enabled() {
+          if !bridge_to_tracing || tracing_enabled() {
             let attributes = run_blocking(refs.span_annotations.get(), ())
               .expect("span_annotations get for flush");
             let status = match &out {
               Ok(_) => SpanStatus::Ok,
               Err(_) => SpanStatus::Error,
             };
-            let ended_at = tracing_now();
+            let ended_at = clock_now();
             if let Some(span) = &tracing_span {
               let status_label = match status {
                 SpanStatus::Unset => "unset",
@@ -1423,7 +1559,7 @@ where
               span.record("effectful_status", status_label);
               span.record("effectful_duration_ns", duration_ns);
             }
-            record_span_end(context.span_id, attributes, status, ended_at);
+            collector.span_ended(context.span_id, attributes, status, ended_at);
           }
           let event = match &out {
             Ok(_) => EffectEvent::Success {
@@ -1433,7 +1569,7 @@ where
               span: span_name.clone(),
             },
           };
-          record_effect_event(event);
+          collector.effect_event(event);
           out
         })
       });
@@ -1492,7 +1628,7 @@ mod tests {
   use crate::scheduling::TestClock;
   use crate::{fail, runtime::run_blocking, succeed};
   use rstest::rstest;
-  use std::sync::{Mutex, OnceLock};
+  use std::sync::{Arc, Mutex, OnceLock};
   use std::time::{Duration, Instant};
 
   static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -1504,8 +1640,139 @@ mod tests {
       .expect("test lock mutex poisoned")
   }
 
+  #[derive(Clone, Default)]
+  struct RecordingTraceCollector {
+    snapshot: Arc<Mutex<TracingSnapshot>>,
+  }
+
+  impl RecordingTraceCollector {
+    fn snapshot(&self) -> TracingSnapshot {
+      self
+        .snapshot
+        .lock()
+        .expect("recording collector mutex poisoned")
+        .clone()
+    }
+  }
+
+  impl TraceCollector for RecordingTraceCollector {
+    fn span_started(&self, span: SpanRecord) {
+      self
+        .snapshot
+        .lock()
+        .expect("recording collector mutex poisoned")
+        .spans
+        .push(span);
+    }
+
+    fn span_ended(
+      &self,
+      span_id: SpanId,
+      attributes: EffectHashMap<String, SpanAttributeValue>,
+      status: SpanStatus,
+      ended_at: Instant,
+    ) {
+      let mut snapshot = self
+        .snapshot
+        .lock()
+        .expect("recording collector mutex poisoned");
+      if let Some(span) = snapshot
+        .spans
+        .iter_mut()
+        .rev()
+        .find(|span| span.context.span_id == span_id)
+      {
+        span.attributes = attributes;
+        span.status = status;
+        span.ended_at = Some(ended_at);
+      }
+    }
+
+    fn span_event(
+      &self,
+      span_id: SpanId,
+      name: String,
+      attributes: EffectHashMap<String, SpanAttributeValue>,
+      occurred_at: Instant,
+    ) {
+      let mut snapshot = self
+        .snapshot
+        .lock()
+        .expect("recording collector mutex poisoned");
+      if let Some(span) = snapshot
+        .spans
+        .iter_mut()
+        .rev()
+        .find(|span| span.context.span_id == span_id)
+      {
+        span.events.push(SpanEvent {
+          name,
+          attributes,
+          occurred_at,
+        });
+      }
+    }
+
+    fn effect_event(&self, event: EffectEvent) {
+      self
+        .snapshot
+        .lock()
+        .expect("recording collector mutex poisoned")
+        .effect_events
+        .push(event);
+    }
+
+    fn fiber_event(&self, event: FiberEvent) {
+      self
+        .snapshot
+        .lock()
+        .expect("recording collector mutex poisoned")
+        .fiber_events
+        .push(event);
+    }
+  }
+
   mod with_span_events {
     use super::*;
+
+    #[test]
+    fn with_span_options_collected_when_effect_succeeds_records_lifecycle() {
+      let _guard = test_lock();
+      let _ = run_blocking(install_tracing_layer(TracingConfig::default()), ());
+      let collector = RecordingTraceCollector::default();
+      let eff = with_span_options_collected(
+        succeed::<u32, (), ()>(7),
+        SpanOptions::new("injected.span").with_attribute("path", "injected"),
+        Arc::new(collector.clone()),
+      );
+
+      let out = run_blocking(eff, ());
+      assert_eq!(out, Ok(7));
+
+      let snapshot = collector.snapshot();
+      assert_eq!(snapshot.spans.len(), 1);
+      let span = &snapshot.spans[0];
+      assert_eq!(span.name, "injected.span");
+      assert_eq!(span.status, SpanStatus::Ok);
+      assert_eq!(span.level, SpanLevel::Info);
+      assert_eq!(
+        span.attributes.get("path"),
+        Some(&SpanAttributeValue::String("injected".to_string()))
+      );
+      assert!(span.ended_at.is_some());
+      assert_eq!(
+        snapshot.effect_events,
+        vec![
+          EffectEvent::Start {
+            span: "injected.span".to_string()
+          },
+          EffectEvent::Success {
+            span: "injected.span".to_string()
+          }
+        ]
+      );
+      assert!(snapshot_tracing().spans.is_empty());
+    }
 
     #[test]
     fn with_span_when_effect_succeeds_records_start_and_success_events() {
