@@ -431,7 +431,7 @@ where
       interpreter.record_attempt().await;
       let mut last = make().run(r).await?;
       while interpreter
-        .sleep_before_next_attempt(InterruptTiming::AfterSchedule)
+        .sleep_before_next_attempt(InterruptTiming::BeforeSchedule)
         .await
       {
         interpreter.record_attempt().await;
@@ -948,6 +948,28 @@ mod tests {
       // First run completes, then the loop checks the token and breaks
       assert_eq!(out, Ok(1));
       assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn repeat_with_interrupt_token_does_not_advance_schedule_when_already_cancelled() {
+      let token = CancellationToken::new();
+      token.cancel();
+      let predicate_calls = Arc::new(AtomicUsize::new(0));
+      let predicate_calls_c = Arc::clone(&predicate_calls);
+      let schedule = Schedule::recurs_while(Box::new(move |_| {
+        predicate_calls_c.fetch_add(1, Ordering::SeqCst);
+        true
+      }));
+      let eff = repeat_with_clock_and_interrupt(
+        || succeed::<(), &'static str, ()>(()),
+        schedule,
+        TestClock::new(std::time::Instant::now()),
+        token,
+        None,
+      );
+
+      assert_eq!(block_on(eff.run(&mut ())), Ok(()));
+      assert_eq!(predicate_calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]
