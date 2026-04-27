@@ -1515,6 +1515,23 @@ mod tests {
     }
 
     #[test]
+    fn map_poll_next_chunk_returns_before_upstream_end() {
+      use futures::FutureExt;
+
+      let (stream, sender) = stream_from_channel::<i32, (), ()>(1);
+      assert_eq!(
+        block_on(send_chunk(&sender, Chunk::from_vec(vec![1])).run(&mut ())),
+        Ok(())
+      );
+
+      let mut stream = stream.map(|n| n + 1);
+      let mut env = ();
+      let poll = stream.poll_next_chunk(&mut env).now_or_never();
+
+      assert_eq!(poll, Some(Ok(Some(Chunk::from_vec(vec![2])))));
+    }
+
+    #[test]
     fn grouped_with_size_groups_stream_into_fixed_size_batches() {
       let stream = Stream::from_iterable([1, 2, 3, 4, 5]).grouped(2);
       let out = block_on(stream.run_collect().run(&mut ()));
