@@ -7,7 +7,7 @@ fn main() {
   };
   let err = bad.plan_topological().unwrap_err();
   assert!(
-    matches!(err, LayerPlannerError::MissingProvider { .. }),
+    matches!(err, LayerPlannerError::MissingProviders { .. }),
     "{err:?}"
   );
   let diags: Vec<LayerDiagnostic> = bad.diagnostics();
