@@ -4,12 +4,9 @@
 //! [`LayerGraph::plan_topological_from_tref`] additionally uses [`crate::stm::TRef`] (Stratum 12)
 //! as an optional extension point for concurrent node updates.
 
-use crate::collections::EffectHashMap;
-use crate::collections::hash_map;
-use crate::collections::mutable_list::MutableList;
 use crate::runtime::run_blocking;
 use crate::stm::{Outcome, Stm, TRef, commit};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One node in a dependency layer graph: unique id, required services, and provided services.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,75 +61,80 @@ impl LayerGraph {
       }
     }
 
-    let mut provider_by_service = EffectHashMap::<String, String>::new();
+    let mut provider_by_service = BTreeMap::<String, String>::new();
     for node in &self.nodes {
       for service in &node.provides {
-        if hash_map::has(&provider_by_service, service) {
-          let existing = hash_map::get(&provider_by_service, service)
-            .expect("key was present")
-            .clone();
+        if let Some(existing) = provider_by_service.get(service) {
           return Err(LayerPlannerError::ConflictingProvider {
             service: service.clone(),
-            first: existing,
+            first: existing.clone(),
             second: node.id.clone(),
           });
         }
-        provider_by_service = hash_map::set(&provider_by_service, service.clone(), node.id.clone());
+        provider_by_service.insert(service.clone(), node.id.clone());
       }
     }
 
-    let mut indegree = EffectHashMap::<String, usize>::new();
-    let mut edges = EffectHashMap::<String, Vec<String>>::new();
+    let mut missing = Vec::new();
     for node in &self.nodes {
-      indegree = hash_map::modify(&indegree, node.id.clone(), |opt| Some(opt.unwrap_or(0)));
-      edges = hash_map::modify(&edges, node.id.clone(), |opt| Some(opt.unwrap_or_default()));
+      for required in &node.requires {
+        if !provider_by_service.contains_key(required) {
+          missing.push(LayerMissingProvider::new(node.id.clone(), required.clone()));
+        }
+      }
+    }
+    if !missing.is_empty() {
+      missing.sort();
+      missing.dedup();
+      return Err(LayerPlannerError::MissingProviders { missing });
+    }
+
+    let mut indegree = BTreeMap::<String, usize>::new();
+    let mut edges = BTreeMap::<String, Vec<String>>::new();
+    for node in &self.nodes {
+      indegree.insert(node.id.clone(), 0);
+      edges.insert(node.id.clone(), Vec::new());
     }
 
     for node in &self.nodes {
       for required in &node.requires {
-        let Some(provider) = hash_map::get(&provider_by_service, required) else {
-          return Err(LayerPlannerError::MissingProvider {
-            node: node.id.clone(),
-            service: required.clone(),
-          });
+        let Some(provider) = provider_by_service.get(required) else {
+          continue;
         };
         let provider = provider.clone();
         if provider == node.id {
           continue;
         }
-        edges = hash_map::modify(&edges, provider.clone(), |opt| {
-          let mut v = opt.unwrap_or_default();
-          v.push(node.id.clone());
-          Some(v)
-        });
-        indegree = hash_map::modify(&indegree, node.id.clone(), |opt| Some(opt.unwrap_or(0) + 1));
-      }
-    }
-
-    let queue = MutableList::<String>::make();
-    for (id, &deg) in indegree.iter() {
-      if deg == 0 {
-        queue.append(id.clone());
-      }
-    }
-    let order = MutableList::<String>::make();
-    while let Some(next) = queue.shift() {
-      order.append(next.clone());
-      let dependents = hash_map::get(&edges, &next).cloned().unwrap_or_default();
-      for dependent in dependents {
-        indegree = hash_map::modify(&indegree, dependent.clone(), |opt| {
-          let mut d = opt.expect("indegree should exist for every node");
-          d -= 1;
-          Some(d)
-        });
-        if hash_map::get(&indegree, &dependent) == Some(&0) {
-          queue.append(dependent);
+        if let Some(dependents) = edges.get_mut(&provider) {
+          dependents.push(node.id.clone());
+        }
+        if let Some(degree) = indegree.get_mut(&node.id) {
+          *degree += 1;
         }
       }
     }
 
-    let order_vec = order.to_chunk().into_vec();
-    if order_vec.len() != self.nodes.len() {
+    let mut queue = BTreeSet::<String>::new();
+    for (id, deg) in &indegree {
+      if *deg == 0 {
+        queue.insert(id.clone());
+      }
+    }
+    let mut order = Vec::new();
+    while let Some(next) = queue.pop_first() {
+      order.push(next.clone());
+      let dependents = edges.get(&next).cloned().unwrap_or_default();
+      for dependent in dependents {
+        if let Some(degree) = indegree.get_mut(&dependent) {
+          *degree = degree.saturating_sub(1);
+        }
+        if indegree.get(&dependent) == Some(&0) {
+          queue.insert(dependent);
+        }
+      }
+    }
+
+    if order.len() != self.nodes.len() {
       let cycle_nodes = indegree
         .iter()
         .filter_map(|(id, &deg)| if deg > 0 { Some(id.clone()) } else { None })
@@ -140,9 +142,7 @@ impl LayerGraph {
       return Err(LayerPlannerError::CycleDetected { nodes: cycle_nodes });
     }
 
-    Ok(LayerPlan {
-      build_order: order_vec,
-    })
+    Ok(LayerPlan { build_order: order })
   }
 
   /// Plan from a single STM snapshot of `nodes` (consistent under concurrent [`TRef::write_stm`]).
@@ -185,6 +185,25 @@ pub struct LayerDiagnostic {
   pub suggestion: String,
 }
 
+/// A missing dependency edge from a layer node to a required service key.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LayerMissingProvider {
+  /// Dependent node id.
+  pub node: String,
+  /// Missing service key.
+  pub service: String,
+}
+
+impl LayerMissingProvider {
+  /// Builds a missing dependency record.
+  pub fn new(node: impl Into<String>, service: impl Into<String>) -> Self {
+    Self {
+      node: node.into(),
+      service: service.into(),
+    }
+  }
+}
+
 /// Failure returned by [`LayerGraph::plan_topological`] and related APIs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LayerPlannerError {
@@ -208,6 +227,11 @@ pub enum LayerPlannerError {
     node: String,
     /// Missing service key.
     service: String,
+  },
+  /// One or more nodes require services that no node provides.
+  MissingProviders {
+    /// Missing dependency edges sorted by node id then service key.
+    missing: Vec<LayerMissingProvider>,
   },
   /// The dependency graph contains a cycle (subset of involved node ids).
   CycleDetected {
@@ -245,6 +269,34 @@ impl LayerPlannerError {
           "Add a provider layer for the missing service or remove the dependency edge.",
         ),
       },
+      LayerPlannerError::MissingProviders { missing } => {
+        if let [dependency] = missing.as_slice() {
+          return LayerDiagnostic {
+            code: "missing-provider",
+            message: format!(
+              "Layer `{}` requires service `{}` but no provider exists.",
+              dependency.node, dependency.service
+            ),
+            suggestion: String::from(
+              "Add a provider layer for the missing service or remove the dependency edge.",
+            ),
+          };
+        }
+        let services = missing
+          .iter()
+          .map(|dependency| format!("`{}`", dependency.service))
+          .collect::<BTreeSet<_>>()
+          .into_iter()
+          .collect::<Vec<_>>()
+          .join(", ");
+        LayerDiagnostic {
+          code: "missing-provider",
+          message: format!("Layer graph requires services {services} but no providers exist."),
+          suggestion: String::from(
+            "Add provider layers for the missing services or remove the dependency edges.",
+          ),
+        }
+      }
       LayerPlannerError::CycleDetected { nodes } => LayerDiagnostic {
         code: "cycle-detected",
         message: format!(
@@ -280,23 +332,14 @@ mod tests {
     #[test]
     fn plan_topological_with_acyclic_dependencies_orders_nodes_in_dependency_order() {
       let graph = LayerGraph::new([
-        LayerNode::new("db", Vec::<&str>::new(), ["Db"]),
-        LayerNode::new("cache", Vec::<&str>::new(), ["Cache"]),
         LayerNode::new("repo", ["Db", "Cache"], ["Repo"]),
         LayerNode::new("api", ["Repo"], ["Api"]),
+        LayerNode::new("db", Vec::<&str>::new(), ["Db"]),
+        LayerNode::new("cache", Vec::<&str>::new(), ["Cache"]),
       ]);
 
       let plan = graph.plan_topological().expect("plan should succeed");
-      let pos = |id: &str| {
-        plan
-          .build_order
-          .iter()
-          .position(|node| node == id)
-          .expect("node must exist")
-      };
-      assert!(pos("db") < pos("repo"));
-      assert!(pos("cache") < pos("repo"));
-      assert!(pos("repo") < pos("api"));
+      assert_eq!(plan.build_order, ["cache", "db", "repo", "api"]);
     }
 
     #[test]
@@ -370,17 +413,23 @@ mod tests {
     }
 
     #[test]
-    fn plan_topological_with_missing_provider_returns_missing_provider_error() {
-      let graph = LayerGraph::new([LayerNode::new("repo", ["Db"], ["Repo"])]);
+    fn plan_topological_with_missing_providers_returns_stable_missing_provider_error() {
+      let graph = LayerGraph::new([
+        LayerNode::new("repo", ["Queue", "Db"], ["Repo"]),
+        LayerNode::new("api", ["Auth"], ["Api"]),
+      ]);
 
       let err = graph
         .plan_topological()
-        .expect_err("missing provider should fail");
+        .expect_err("missing providers should fail");
       assert_eq!(
         err,
-        LayerPlannerError::MissingProvider {
-          node: String::from("repo"),
-          service: String::from("Db"),
+        LayerPlannerError::MissingProviders {
+          missing: vec![
+            LayerMissingProvider::new("api", "Auth"),
+            LayerMissingProvider::new("repo", "Db"),
+            LayerMissingProvider::new("repo", "Queue"),
+          ],
         }
       );
     }
@@ -433,9 +482,8 @@ mod tests {
       "canonical provider"
     )]
     #[case::missing(
-      LayerPlannerError::MissingProvider {
-        node: String::from("repo"),
-        service: String::from("Db"),
+      LayerPlannerError::MissingProviders {
+        missing: vec![LayerMissingProvider::new("repo", "Db")],
       },
       "missing-provider",
       "requires service `Db`",
@@ -460,13 +508,16 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_with_missing_provider_returns_single_actionable_diagnostic() {
-      let graph = LayerGraph::new([LayerNode::new("repo", ["Db"], ["Repo"])]);
+    fn diagnostics_with_missing_providers_returns_stable_service_keys() {
+      let graph = LayerGraph::new([
+        LayerNode::new("repo", ["Queue", "Db"], ["Repo"]),
+        LayerNode::new("api", ["Auth"], ["Api"]),
+      ]);
       let diagnostics = graph.diagnostics();
 
       assert_eq!(diagnostics.len(), 1);
       assert_eq!(diagnostics[0].code, "missing-provider");
-      assert!(diagnostics[0].message.contains("requires service `Db`"));
+      assert!(diagnostics[0].message.contains("`Auth`, `Db`, `Queue`"));
       assert!(diagnostics[0].suggestion.contains("provider"));
     }
   }

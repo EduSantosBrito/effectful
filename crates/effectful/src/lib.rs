@@ -111,8 +111,8 @@ pub use foundation::piping::Pipe;
 pub use foundation::predicate::Predicate;
 pub use layer::{
   Layer, LayerBuild, LayerDiagnostic, LayerEffect, LayerError, LayerExt, LayerFn, LayerFnFrom,
-  LayerFrom, LayerGraph, LayerNode, LayerPlan, LayerPlannerError, MemoizedLayer, MergedLayer,
-  Stack, StackThen, TypedLayer, TypedLayerExt, merge_all,
+  LayerFrom, LayerGraph, LayerMissingProvider, LayerNode, LayerPlan, LayerPlannerError,
+  MemoizedLayer, MergedLayer, Stack, StackThen, TypedLayer, TypedLayerExt, merge_all,
 };
 pub use observability::{
   __effectful_span_lazy, __effectful_span_lazy_scoped, AnnotateCurrentSpanErr,

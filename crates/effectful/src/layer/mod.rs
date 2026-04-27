@@ -6,7 +6,7 @@
 //! |-----------|----------|------------|
 //! | [`di`] | [`Layer`] | Stratum 2 (`kernel::Effect`), Stratum 3 (`context::ServiceContext`) |
 //! | [`factory`] | [`LayerBuild`], [`LayerExt`], [`LayerFn`], [`LayerFnFrom`], [`LayerFrom`], [`Stack`], [`StackThen`], constructors | Stratum 0 (`func::compose`, `func::pipe1`), Stratum 2 (`kernel::Effect`), Stratum 3 (`context::{Cons, Nil}`), Stratum 6 (`runtime::run_blocking`) |
-//! | [`graph`] | [`LayerGraph`], [`LayerNode`], [`LayerPlan`], [`LayerPlannerError`], [`LayerDiagnostic`] | Stratum 0 (`hash_map`, `mutable_list`), Stratum 6 (`runtime::run_blocking`), Stratum 12 (`stm::TRef`, optional) |
+//! | [`graph`] | [`LayerGraph`], [`LayerNode`], [`LayerPlan`], [`LayerPlannerError`], [`LayerDiagnostic`] | `std::collections`, Stratum 6 (`runtime::run_blocking`), Stratum 12 (`stm::TRef`, optional) |
 //!
 //! ## Design
 //!
@@ -25,7 +25,8 @@
 //!
 //! Re-exported at the crate root: [`Layer`], [`LayerExt`], [`LayerEffect`], [`LayerFn`],
 //! [`LayerFnFrom`], [`LayerFrom`], [`Stack`], [`StackThen`], [`merge_all`],
-//! [`LayerGraph`], [`LayerNode`], [`LayerPlan`], [`LayerPlannerError`], [`LayerDiagnostic`].
+//! [`LayerGraph`], [`LayerNode`], [`LayerPlan`], [`LayerPlannerError`], [`LayerDiagnostic`],
+//! [`LayerMissingProvider`].
 
 pub mod di;
 pub mod factory;
@@ -38,7 +39,9 @@ pub use factory::{
   LayerBuild, LayerEffect, LayerExt, LayerFn, LayerFnFrom, LayerFrom, Stack, StackThen, effect,
   fail, from_fn, merge_all, succeed,
 };
-pub use graph::{LayerDiagnostic, LayerGraph, LayerNode, LayerPlan, LayerPlannerError};
+pub use graph::{
+  LayerDiagnostic, LayerGraph, LayerMissingProvider, LayerNode, LayerPlan, LayerPlannerError,
+};
 pub use service::{
   Service, ServiceEnv, layer_service, layer_service_env, provide_service, service, service_env,
 };
