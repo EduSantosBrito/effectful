@@ -96,13 +96,7 @@ where
 {
   axum::routing::post(move |st: State<S>| {
     let f = f.clone();
-    async move {
-      let State(env) = st;
-      match crate::run_effect_from_state(env, |e| f(e)).await {
-        Ok(a) => a.into_response(),
-        Err(e) => e.into_response(),
-      }
-    }
+    async move { crate::execute(st, move |e| f(e)).await }
   })
 }
 
@@ -335,6 +329,7 @@ mod tests {
   use axum::routing::{MethodFilter, Router};
   use effectful::duration::Duration;
   use effectful::{Effect, Metric, fail, succeed};
+  use http_body_util::BodyExt;
   use tower::ServiceExt;
 
   use super::*;
@@ -348,6 +343,48 @@ mod tests {
 
   fn fail_handler(_: &mut AppState) -> Effect<(), (StatusCode, &'static str), AppState> {
     fail((StatusCode::INTERNAL_SERVER_ERROR, "nope"))
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn post_success_maps_effect_value_into_response() {
+    let app = Router::new().route("/p", post(ok)).with_state(AppState(()));
+
+    let res = app
+      .oneshot(
+        Request::builder()
+          .method(Method::POST)
+          .uri("/p")
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"ok");
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn post_error_maps_effect_error_into_response() {
+    let app = Router::new()
+      .route("/p", post(fail_handler))
+      .with_state(AppState(()));
+
+    let res = app
+      .oneshot(
+        Request::builder()
+          .method(Method::POST)
+          .uri("/p")
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"nope");
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
