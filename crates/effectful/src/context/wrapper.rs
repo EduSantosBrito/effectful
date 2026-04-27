@@ -91,6 +91,21 @@ impl<H, T> Context<Cons<H, T>> {
     &self.0.1
   }
 
+  /// Resolve service key `K` from the cell immediately after the head.
+  ///
+  /// Use this for compile-time [`Context`] environments when the service is known
+  /// to live directly behind an adapter/header cell and you want caller code to
+  /// name only the service key, not HList path types such as
+  /// [`Skip1`](super::path::Skip1). Use [`ServiceContext`](super::services::ServiceContext)
+  /// instead when the set of services is assembled dynamically at runtime.
+  #[inline]
+  pub fn get_after_head<K>(&self) -> &<T as Get<K, Here>>::Target
+  where
+    T: Get<K, Here>,
+  {
+    Get::<K, Here>::get(&self.0.1)
+  }
+
   /// Drop the head cell and wrap only the tail as a [`Context`].
   #[inline]
   pub fn into_tail(self) -> Context<T> {
