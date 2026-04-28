@@ -1,5 +1,5 @@
 use ::effectful::context::Tagged;
-use ::effectful::layer::{Layer, LayerFn, Stack};
+use ::effectful::layer::{LayerBuild, LayerFn, Stack};
 use ::effectful::scheduling::schedule::{Schedule, retry};
 use ::effectful::streaming::stream::Stream;
 use ::effectful::{fail, pure, succeed};
