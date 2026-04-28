@@ -19,6 +19,13 @@ mod context_to_service_context {
   use super::*;
 
   #[test]
+  fn ctx_macro_interop() {
+    let static_ctx = effectful::ctx!(Config => Config { port: 8080 });
+    let env: ServiceContext = static_ctx.into_service_context();
+    assert_eq!(env.get_cloned::<Config>(), Some(Config { port: 8080 }));
+  }
+
+  #[test]
   fn single_service_converts_and_looks_up() {
     let ctx = Context::new(effectful::Cons(
       effectful::Tagged::<Config, _>::new(Config { port: 8080 }),

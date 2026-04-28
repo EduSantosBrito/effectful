@@ -57,9 +57,10 @@ This avoids exposing HList paths in most application signatures.
 When you have a statically-built `Context` and need to feed it into an effect that requires `ServiceContext`, convert at the edge:
 
 ```rust,ignore
-use effectful::{ctx, Effect, IntoServiceContext, MissingService, Service, ServiceContext};
+use effectful::{ctx, Effect, IntoServiceContext, MissingService, Service, ServiceContext,
+  run_blocking};
 
-#[derive(Clone, Service)]
+#[derive(Clone, Hash, Service)]
 struct Config { port: u16 }
 
 let static_ctx = ctx!(Config => Config { port: 8080 });

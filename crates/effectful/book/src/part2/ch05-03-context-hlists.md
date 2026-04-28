@@ -59,7 +59,10 @@ Use HList `Context` when you want maximum static structure. Use `ServiceContext`
 At the composition root you may have a statically-typed `Context` but need to hand it to code that expects `ServiceContext`. Use [`IntoServiceContext`]:
 
 ```rust,ignore
-use effectful::{ctx, IntoServiceContext, ServiceContext};
+use effectful::{ctx, IntoServiceContext, Service, ServiceContext};
+
+#[derive(Clone, Hash, Service)]
+struct Config { port: u16 }
 
 let static_ctx = ctx!(Config => Config { port: 8080 });
 let runtime_ctx: ServiceContext = static_ctx.into_service_context();
