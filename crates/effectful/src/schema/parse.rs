@@ -132,7 +132,7 @@ impl<A: 'static, I: 'static, E: EffectData + 'static> Schema<A, I, E> {
     Self::make_with_decode_unknown_all(decode, encode, decode_unknown, decode_unknown_all)
   }
 
-  fn make_with_decode_unknown_all(
+  pub(crate) fn make_with_decode_unknown_all(
     decode: impl Fn(I) -> Result<A, ParseError> + Send + Sync + 'static,
     encode: impl Fn(A) -> I + Send + Sync + 'static,
     decode_unknown: BoxDecodeUnknown<A>,

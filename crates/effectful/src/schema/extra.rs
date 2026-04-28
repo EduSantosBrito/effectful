@@ -7,6 +7,7 @@ use std::sync::{Arc, OnceLock};
 
 use crate::schema::data::EffectData;
 use crate::schema::parse::{ParseError, Schema, Unknown};
+use crate::schema::parse_errors::ParseErrors;
 
 /// Homogeneous string-keyed map (JSON object with arbitrary keys, same value schema).
 ///
@@ -150,8 +151,20 @@ where
   let list: Arc<Vec<Schema<A, Unknown, E>>> = Arc::new(schemas);
   let list_dec = list.clone();
   let list_du = list.clone();
+  let list_all = list.clone();
   let enc = list[0].clone();
-  Schema::make(
+  let decode_unknown = Arc::new(move |u: &Unknown| -> Result<A, ParseError> {
+    for s in list_du.iter() {
+      if let Ok(a) = s.decode_unknown(u) {
+        return Ok(a);
+      }
+    }
+    Err(ParseError::new(
+      "",
+      "no arm of union_chain accepted the unknown value",
+    ))
+  });
+  Schema::make_with_decode_unknown_all(
     move |u: Unknown| {
       for s in list_dec.iter() {
         if let Ok(a) = s.decode(u.clone()) {
@@ -164,17 +177,26 @@ where
       ))
     },
     move |a| enc.encode(a),
-    move |u| {
-      for s in list_du.iter() {
-        if let Ok(a) = s.decode_unknown(u) {
-          return Ok(a);
+    decode_unknown.clone(),
+    Arc::new(move |u| {
+      let mut issues = Vec::new();
+      for (idx, s) in list_all.iter().enumerate() {
+        match s.decode_unknown_all(u) {
+          Ok(a) => return Ok(a),
+          Err(errs) => {
+            issues.extend(errs.prefix(&idx.to_string()).issues);
+          }
         }
       }
-      Err(ParseError::new(
-        "",
-        "no arm of union_chain accepted the unknown value",
-      ))
-    },
+      if issues.is_empty() {
+        Err(ParseErrors::one(ParseError::new(
+          "",
+          "no arm of union_chain accepted the unknown value",
+        )))
+      } else {
+        Err(ParseErrors::new(issues))
+      }
+    }),
   )
 }
 
@@ -411,6 +433,25 @@ mod tests {
     fn union_chain_decode_wire_all_fail_returns_error() {
       let s = union_chain(vec![filter(i64_unknown_wire::<()>(), |_| false, "never")]);
       assert!(s.decode(Unknown::I64(1)).is_err());
+    }
+
+    #[test]
+    fn union_chain_decode_unknown_all_preserves_arm_diagnostics() {
+      let s = union_chain(vec![
+        filter(i64_unknown_wire::<()>(), |n| *n > 0, "positive"),
+        filter(i64_unknown_wire::<()>(), |n| *n < 0, "negative"),
+      ]);
+
+      let err = s
+        .decode_unknown_all(&Unknown::I64(0))
+        .expect_err("all arms reject zero");
+
+      assert_eq!(err.issues.len(), 2);
+      assert_eq!(err.issues[0].path, "0");
+      assert_eq!(err.issues[0].message, "positive");
+      assert_eq!(err.issues[1].path, "1");
+      assert_eq!(err.issues[1].message, "negative");
+      assert_eq!(err.to_string(), "0: positive\n1: negative");
     }
   }
 
