@@ -91,14 +91,11 @@ pub use concurrency::{
   CancellationToken, FiberHandle, FiberId, FiberRef, FiberStatus, check_interrupt, fiber_all,
   fiber_never, fiber_succeed, interrupt_all, with_fiber_id,
 };
-pub use context::{
-  Cons, Context, Get, GetMut, HasTag, Here, Matcher, MissingService, Nil, ServiceContext,
-  ServiceLookup, Skip0, Skip1, Skip2, Skip3, Skip4, Tag, Tagged, There, ThereHere, prepend_cell,
-  tagged,
-};
 pub use context::Service as ContextService;
-pub use layer::service::{
-  Service, ServiceEnv, layer_service, layer_service_env, provide_service, service, service_env,
+pub use context::{
+  Cons, Context, Get, GetMut, HasTag, Here, IntoServiceContext, Matcher, MissingService, Nil,
+  ServiceContext, ServiceLookup, Skip0, Skip1, Skip2, Skip3, Skip4, Tag, Tagged, There, ThereHere,
+  prepend_cell, tagged,
 };
 pub use coordination::semaphore::Permit;
 pub use coordination::{
@@ -113,6 +110,9 @@ pub use foundation::func::{
 pub use foundation::mutable_ref::MutableRef;
 pub use foundation::piping::Pipe;
 pub use foundation::predicate::Predicate;
+pub use layer::service::{
+  Service, ServiceEnv, layer_service, layer_service_env, provide_service, service, service_env,
+};
 pub use layer::{
   Layer, LayerBuild, LayerDiagnostic, LayerEffect, LayerError, LayerExt, LayerFn, LayerFnFrom,
   LayerFrom, LayerGraph, LayerMissingProvider, LayerNode, LayerPlan, LayerPlannerError,

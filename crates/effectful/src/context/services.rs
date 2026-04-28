@@ -8,6 +8,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::context::{Cons, Nil, Tagged};
 use crate::runtime::Never;
 
 /// Service marker implemented by `#[derive(Service)]`.
@@ -239,3 +240,138 @@ impl fmt::Display for MissingService {
 }
 
 impl std::error::Error for MissingService {}
+
+/// Convert a compile-time HList [`Context`] into a runtime [`ServiceContext`].
+///
+/// Only self-keyed service cells (`Tagged<S, S>` where `S: `[`Service`]) are
+/// extracted; arbitrary tagged values cannot silently enter runtime service
+/// lookup.
+///
+/// ## Example
+///
+/// ```ignore
+/// use effectful::{ctx, Context, IntoServiceContext, ServiceContext};
+///
+/// #[derive(Clone, Service)]
+/// struct Config { port: u16 }
+///
+/// let ctx = ctx!(Config => Config { port: 8080 });
+/// let svc_ctx: ServiceContext = ctx.into_service_context();
+/// ```
+pub trait IntoServiceContext {
+  /// Consume `self` and produce a [`ServiceContext`].
+  fn into_service_context(self) -> ServiceContext;
+}
+
+impl IntoServiceContext for ServiceContext {
+  #[inline]
+  fn into_service_context(self) -> ServiceContext {
+    self
+  }
+}
+
+impl IntoServiceContext for Nil {
+  #[inline]
+  fn into_service_context(self) -> ServiceContext {
+    ServiceContext::empty()
+  }
+}
+
+impl<S, Tail> IntoServiceContext for Cons<Tagged<S, S>, Tail>
+where
+  S: Service,
+  Tail: IntoServiceContext,
+{
+  #[inline]
+  fn into_service_context(self) -> ServiceContext {
+    let tail = self.1.into_service_context();
+    tail.add(self.0.value)
+  }
+}
+
+impl<L> IntoServiceContext for crate::context::Context<L>
+where
+  L: IntoServiceContext,
+{
+  #[inline]
+  fn into_service_context(self) -> ServiceContext {
+    self.0.into_service_context()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::Service)]
+  struct Config {
+    port: u16,
+  }
+
+  #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::Service)]
+  struct Db {
+    id: u8,
+  }
+
+  mod into_service_context {
+    use super::*;
+
+    #[test]
+    fn nil_produces_empty_context() {
+      let ctx = Nil.into_service_context();
+      assert!(ctx.service_names().is_empty());
+    }
+
+    #[test]
+    fn single_service_cell_converts() {
+      let ctx = Cons(Tagged::<Config, _>::new(Config { port: 8080 }), Nil).into_service_context();
+      assert_eq!(ctx.get_cloned::<Config>(), Some(Config { port: 8080 }));
+    }
+
+    #[test]
+    fn multiple_service_cells_convert() {
+      let ctx = Cons(
+        Tagged::<Config, _>::new(Config { port: 8080 }),
+        Cons(Tagged::<Db, _>::new(Db { id: 1 }), Nil),
+      )
+      .into_service_context();
+      assert_eq!(ctx.get_cloned::<Config>(), Some(Config { port: 8080 }));
+      assert_eq!(ctx.get_cloned::<Db>(), Some(Db { id: 1 }));
+    }
+
+    #[test]
+    fn context_wrapper_converts() {
+      let ctx =
+        crate::context::Context::new(Cons(Tagged::<Config, _>::new(Config { port: 9090 }), Nil));
+      let svc_ctx = ctx.into_service_context();
+      assert_eq!(svc_ctx.get_cloned::<Config>(), Some(Config { port: 9090 }));
+    }
+
+    #[test]
+    fn service_context_identity() {
+      let ctx = ServiceContext::empty().add(Config { port: 3000 });
+      let converted = ctx.into_service_context();
+      assert_eq!(
+        converted.get_cloned::<Config>(),
+        Some(Config { port: 3000 })
+      );
+    }
+
+    #[test]
+    fn duplicate_service_types_head_wins() {
+      let ctx = Cons(
+        Tagged::<Config, _>::new(Config { port: 1 }),
+        Cons(Tagged::<Config, _>::new(Config { port: 2 }), Nil),
+      )
+      .into_service_context();
+      assert_eq!(ctx.get_cloned::<Config>(), Some(Config { port: 1 }));
+    }
+
+    #[test]
+    fn service_lookup_trait_still_works_after_conversion() {
+      let ctx = Cons(Tagged::<Config, _>::new(Config { port: 8080 }), Nil).into_service_context();
+      let looked_up: Option<&Config> = ServiceLookup::<Config>::service(&ctx);
+      assert_eq!(looked_up, Some(&Config { port: 8080 }));
+    }
+  }
+}

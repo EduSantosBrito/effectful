@@ -25,6 +25,7 @@ Examples are named `NNN_slug.rs` (three-digit order + short topic). Run from the
 | 089–092 | `089_ensuring` … `092_scoped` | `ensuring`, acquire/release, `scope_with`, `scoped` |
 | 093–099 | `093_tracing_install` … `099_snapshot_corpus` | tracing + test harness |
 | 100–105 | `100_channel_queue` … `105_match_matcher` | `Channel`, `PubSub`, pool, cache, `Matcher` |
+| 108 | `108_context_service_context_interop` | `Context` → `ServiceContext` interop |
 
 ## Tokio adapter (`effectful_tokio`, 106–109)
 

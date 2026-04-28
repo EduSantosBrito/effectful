@@ -53,3 +53,24 @@ This explicit path is why application code often wraps bounds in `NeedsX` traits
 An HList preserves each value's type in the environment type. That gives compile-time lookup and no runtime downcast. The cost is verbose types like `Cons<Tagged<A, V>, Cons<Tagged<B, W>, Nil>>`.
 
 Use HList `Context` when you want maximum static structure. Use `ServiceContext` when you want a simpler runtime service table keyed by service type.
+
+## Converting `Context` to `ServiceContext`
+
+At the composition root you may have a statically-typed `Context` but need to hand it to code that expects `ServiceContext`. Use [`IntoServiceContext`]:
+
+```rust,ignore
+use effectful::{ctx, IntoServiceContext, ServiceContext};
+
+let static_ctx = ctx!(Config => Config { port: 8080 });
+let runtime_ctx: ServiceContext = static_ctx.into_service_context();
+```
+
+Only self-keyed service cells (`Tagged<S, S>` where `S` implements [`Service`]) convert. Arbitrary tagged values cannot silently enter runtime service lookup. Duplicate service types in one list make the head cell win, matching compile-time lookup intuition.
+
+## When to Use Which
+
+| Situation | Use |
+|-----------|-----|
+| Exact statically-shaped tagged HList; compile-time guarantees | `Context` |
+| Derive-service application code / layers; dynamic runtime lookup | `ServiceContext` |
+| Bridging the two at the composition root | `.into_service_context()` |

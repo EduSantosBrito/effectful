@@ -51,3 +51,22 @@ let user = run_blocking(get_user(42), env)?;
 ```
 
 This avoids exposing HList paths in most application signatures.
+
+## Interop: compile-time `Context` → `ServiceContext`
+
+When you have a statically-built `Context` and need to feed it into an effect that requires `ServiceContext`, convert at the edge:
+
+```rust,ignore
+use effectful::{ctx, Effect, IntoServiceContext, MissingService, Service, ServiceContext};
+
+#[derive(Clone, Service)]
+struct Config { port: u16 }
+
+let static_ctx = ctx!(Config => Config { port: 8080 });
+let env: ServiceContext = static_ctx.into_service_context();
+
+let program: Effect<bool, MissingService, ServiceContext> =
+    Config::use_sync(|config| config.port == 8080);
+
+let ok = run_blocking(program, env)?;
+```
