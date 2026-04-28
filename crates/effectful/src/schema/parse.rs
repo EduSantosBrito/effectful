@@ -913,6 +913,33 @@ mod tests {
       assert_eq!(err.issues[0].path, "name");
       assert_eq!(err.issues[1].path, "age");
     }
+
+    #[test]
+    fn decode_unknown_all_non_object_fails() {
+      let s = person_schema();
+      let err = s
+        .decode_unknown_all(&Unknown::I64(1))
+        .expect_err("non-object should fail");
+      assert_eq!(err.issues.len(), 1);
+      assert_eq!(err.issues[0].path, "");
+      assert!(err.issues[0].message.contains("expected object"));
+    }
+
+    #[test]
+    fn decode_unknown_all_when_one_field_missing_one_wrong_type_returns_both_paths() {
+      let s = person_schema();
+      let mut m = BTreeMap::new();
+      m.insert("name".into(), Unknown::I64(1)); // wrong type
+      // "age" is missing
+
+      let err = s
+        .decode_unknown_all(&Unknown::Object(m))
+        .expect_err("one wrong type + one missing should fail");
+
+      assert_eq!(err.issues.len(), 2);
+      assert_eq!(err.issues[0].path, "name");
+      assert_eq!(err.issues[1].path, "age");
+    }
   }
 
   mod bool_codec {
