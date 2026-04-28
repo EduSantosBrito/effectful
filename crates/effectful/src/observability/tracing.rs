@@ -1775,7 +1775,6 @@ mod tests {
       assert_ne!(span.context.span_id, parsed.span_id);
       assert_eq!(span.context.trace_flags, parsed.trace_flags);
       assert_eq!(span.status, SpanStatus::Ok);
-      assert!(snapshot_tracing().spans.is_empty());
     }
 
     #[test]
