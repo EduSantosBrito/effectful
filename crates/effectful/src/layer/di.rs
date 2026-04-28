@@ -294,8 +294,15 @@ where
   #[inline]
   pub fn diagnostics_with_context(&self, context: &ServiceContext) -> Vec<LayerDiagnostic> {
     let mut nodes = self.nodes.clone();
+    let already_provided: std::collections::HashSet<&str> = self
+      .nodes
+      .iter()
+      .flat_map(|n| n.provides.iter().map(|s| s.as_str()))
+      .collect();
     for name in context.service_names() {
-      nodes.push(LayerNode::new(name, Vec::<&str>::new(), [name]));
+      if !already_provided.contains(name) {
+        nodes.push(LayerNode::new(name, Vec::<&str>::new(), [name]));
+      }
     }
     LayerGraph::new(nodes).diagnostics()
   }
@@ -544,6 +551,20 @@ mod tests {
 
       let context = run_blocking(layer.build(), ()).expect("layer should build");
       assert!(context.contains::<Config>());
+    }
+
+    #[test]
+    fn diagnostics_with_context_when_service_already_provided_by_layer_returns_empty() {
+      let layer = Layer::<Config, MissingService>::succeed(Config {
+        url: "postgres://".to_string(),
+      });
+      let ctx = ServiceContext::empty().add(Config {
+        url: "other://".to_string(),
+      });
+
+      let diagnostics = layer.diagnostics_with_context(&ctx);
+
+      assert!(diagnostics.is_empty());
     }
   }
 }
