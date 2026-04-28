@@ -71,6 +71,83 @@ where
   }
 }
 
+struct ChannelPull<A, InElem, OutDone, E, R>
+where
+  A: Send + Clone + 'static,
+  InElem: Send + 'static,
+  OutDone: 'static,
+  E: Send + 'static,
+  R: 'static,
+{
+  ch: crate::coordination::channel::Channel<A, InElem, OutDone, E, R>,
+}
+
+impl<A, InElem, OutDone, E, R> PullStream<A, crate::ChannelReadError<E>, R>
+  for ChannelPull<A, InElem, OutDone, E, R>
+where
+  A: Send + Clone + 'static,
+  InElem: Send + 'static,
+  OutDone: 'static,
+  E: Send + 'static,
+  R: 'static,
+{
+  fn poll_next_chunk_with_size<'a>(
+    &'a mut self,
+    env: &'a mut R,
+    _chunk_size: usize,
+  ) -> crate::kernel::BoxFuture<'a, Result<Option<Chunk<A>>, crate::ChannelReadError<E>>> {
+    Box::pin(async move {
+      match self.ch.read().run(env).await? {
+        Some(item) => Ok(Some(Chunk::from_vec(vec![item]))),
+        None => Ok(None),
+      }
+    })
+  }
+}
+
+struct FilterPull<A, E, R>
+where
+  A: Send + 'static,
+  E: Send + 'static,
+  R: 'static,
+{
+  upstream: Stream<A, E, R>,
+  p: Predicate<A>,
+}
+
+impl<A, E, R> PullStream<A, E, R> for FilterPull<A, E, R>
+where
+  A: Send + 'static,
+  E: Send + 'static,
+  R: 'static,
+{
+  fn poll_next_chunk_with_size<'a>(
+    &'a mut self,
+    env: &'a mut R,
+    chunk_size: usize,
+  ) -> crate::kernel::BoxFuture<'a, Result<Option<Chunk<A>>, E>> {
+    Box::pin(async move {
+      loop {
+        let chunk = self
+          .upstream
+          .poll_next_chunk_with_size(env, chunk_size)
+          .await?;
+        let Some(chunk) = chunk else {
+          return Ok(None);
+        };
+        let filtered: Vec<A> = chunk
+          .into_vec()
+          .into_iter()
+          .filter(|item| (self.p)(item))
+          .collect();
+        if !filtered.is_empty() {
+          return Ok(Some(Chunk::from_vec(filtered)));
+        }
+      }
+    })
+  }
+}
+
 enum PullTerminal {
   Active,
   Closed,
@@ -379,6 +456,7 @@ where
   ) -> crate::kernel::BoxFuture<'a, Result<Option<Chunk<A>>, E>> {
     let state = self.state.clone();
     let throughput = self.throughput.clone();
+    let cancellation = self.cancellation.clone();
     // `guard` is dropped before every `.await` (see Channel recv + Pending arms); clippy's
     // CFG does not always prove that across the `match`.
     #[allow(clippy::await_holding_lock)]
@@ -388,6 +466,9 @@ where
       }
 
       loop {
+        if cancellation.is_cancelled() {
+          return Ok(None);
+        }
         let mut guard = state.lock().expect("stream state mutex poisoned");
         match &mut *guard {
           StreamState::DirectQueue {
@@ -550,7 +631,7 @@ where
 
   /// Any [`Channel`](crate::coordination::channel::Channel) as an output [`Stream`] (Wave 7).
   ///
-  /// Drains via [`Channel::read`](crate::coordination::channel::Channel::read). [`Channel::to_stream`](crate::coordination::channel::Channel::to_stream) forwards to this constructor.
+  /// Pulls via [`Channel::read`](crate::coordination::channel::Channel::read). [`Channel::to_stream`](crate::coordination::channel::Channel::to_stream) forwards to this constructor.
   #[inline]
   #[must_use]
   pub fn from_channel<InElem, OutDone>(
@@ -561,20 +642,7 @@ where
     InElem: Send + 'static,
     OutDone: 'static,
   {
-    let ch = ch.clone();
-    Stream::new(move |env: &mut R| {
-      crate::box_future(async move {
-        let mut out = Vec::new();
-        loop {
-          match ch.read().run(env).await {
-            Ok(None) => break,
-            Ok(Some(x)) => out.push(x),
-            Err(e) => return Err(e),
-          }
-        }
-        Ok(out)
-      })
-    })
+    Stream::from_pull(ChannelPull { ch })
   }
 
   /// Generates elements by repeatedly running `f` on state until it returns `None`.
@@ -731,20 +799,7 @@ where
   #[inline]
   pub fn filter(self, p: Predicate<A>) -> Stream<A, E, R> {
     let cancellation = self.cancellation.clone();
-    Stream::new(move |r: &mut R| {
-      Box::pin(async move {
-        let mut upstream = self;
-        let mut out = Vec::new();
-        loop {
-          let Some(chunk) = upstream.poll_next_chunk(r).await? else {
-            break;
-          };
-          out.extend(chunk.into_vec().into_iter().filter(|item| p(item)));
-        }
-        Ok(out)
-      })
-    })
-    .with_stream_cancellation(cancellation)
+    Stream::from_pull(FilterPull { upstream: self, p }).with_stream_cancellation(cancellation)
   }
 
   /// Yields elements from the start of the stream while `p` holds; ends before the first failure.
@@ -1755,6 +1810,81 @@ mod tests {
       let out = block_on(stream.run_collect().run(&mut ()));
       assert_eq!(out, Ok(expected));
     }
+
+    #[test]
+    fn filter_poll_next_chunk_returns_before_upstream_end() {
+      use futures::FutureExt;
+
+      let (stream, sender) = stream_from_channel::<i32, (), ()>(1);
+      assert_eq!(
+        block_on(send_chunk(&sender, Chunk::from_vec(vec![1, 2])).run(&mut ())),
+        Ok(())
+      );
+
+      let mut stream = stream.filter(Box::new(|n: &i32| *n % 2 == 0));
+      let mut env = ();
+      let poll = stream.poll_next_chunk(&mut env).now_or_never();
+
+      assert_eq!(poll, Some(Ok(Some(Chunk::from_vec(vec![2])))));
+    }
+
+    #[test]
+    fn filter_does_not_drain_channel_eagerly() {
+      use futures::FutureExt;
+
+      let (stream, sender) = stream_from_channel::<i32, (), ()>(1);
+      assert_eq!(
+        block_on(send_chunk(&sender, Chunk::from_vec(vec![1, 2])).run(&mut ())),
+        Ok(())
+      );
+
+      let mut stream = stream.filter(Box::new(|n: &i32| *n % 2 == 0));
+      let mut env = ();
+      let poll = stream.poll_next_chunk(&mut env).now_or_never();
+
+      assert_eq!(poll, Some(Ok(Some(Chunk::from_vec(vec![2])))));
+    }
+
+    #[test]
+    fn filter_with_throughput_metric_counts_yielded_items() {
+      let m = Metric::counter("filter_throughput", []);
+      let stream = Stream::from_iterable(vec![1_i32, 2, 3, 4])
+        .filter(Box::new(|n: &i32| *n % 2 == 0))
+        .with_throughput_metric(m.clone());
+      let out = block_on(stream.run_collect().run(&mut ()));
+      assert_eq!(out, Ok(vec![2, 4]));
+      assert_eq!(m.snapshot_count(), 2);
+    }
+
+    #[test]
+    fn channel_source_map_filter_metric_cancellation_end_to_end() {
+      use crate::runtime::CancellationToken;
+
+      let token = CancellationToken::new();
+      let cancel_after_first = token.clone();
+
+      let (stream, sender) = stream_from_channel::<i32, (), ()>(1);
+      assert_eq!(
+        block_on(send_chunk(&sender, Chunk::from_vec(vec![1, 2])).run(&mut ())),
+        Ok(())
+      );
+
+      let m = Metric::counter("e2e_throughput", []);
+      let stream = stream
+        .map(move |n| {
+          if n == 1 {
+            cancel_after_first.cancel();
+          }
+          n * 2
+        })
+        .filter(Box::new(|n: &i32| *n % 4 == 0))
+        .with_throughput_metric(m.clone())
+        .with_cancellation(token);
+
+      let out = block_on(stream.run_collect().run(&mut ()));
+      assert_eq!(out, Ok(vec![4]));
+      assert_eq!(m.snapshot_count(), 1);
+    }
   }
 
   mod consumers {
@@ -2037,6 +2167,34 @@ mod tests {
 
       let out = block_on(stream.run_collect().run(&mut ()));
       assert_eq!(out, Ok(vec![1]));
+    }
+
+    #[test]
+    fn from_channel_poll_next_chunk_returns_before_upstream_end() {
+      use futures::FutureExt;
+
+      let (src_stream, sender) = stream_from_channel::<i32, (), ()>(1);
+      assert_eq!(
+        block_on(send_chunk(&sender, Chunk::from_vec(vec![1])).run(&mut ())),
+        Ok(())
+      );
+
+      let ch = Channel::<i32, (), (), (), ()>::from_stream(src_stream);
+      let mut stream = Stream::from_channel(ch).map(|n| n + 1);
+      let mut env = ();
+      let poll = stream.poll_next_chunk(&mut env).now_or_never();
+
+      assert_eq!(poll, Some(Ok(Some(Chunk::from_vec(vec![2])))));
+    }
+
+    #[test]
+    fn from_channel_with_throughput_metric_counts_yielded_items() {
+      let ch = Channel::<i32, (), (), (), ()>::from_stream(Stream::from_iterable([1_i32, 2, 3]));
+      let m = Metric::counter("channel_throughput", []);
+      let stream = Stream::from_channel(ch).with_throughput_metric(m.clone());
+      let out = block_on(stream.run_collect().run(&mut ()));
+      assert_eq!(out, Ok(vec![1, 2, 3]));
+      assert_eq!(m.snapshot_count(), 3);
     }
   }
 
