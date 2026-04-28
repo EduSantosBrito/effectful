@@ -22,11 +22,11 @@ Read the diff carefully:
 
 Apply repo standards from:
 
-- `README.md`
-- `TESTING.md`
-- `moon.yml`
+{{REPO_DOCS}}
 
 # REVIEW PROCESS
+
+Before reviewing, use the `improve-codebase-architecture` skill on the files affected by this branch. Scope its recommendations to this issue's changed files only; do not start unrelated architecture work.
 
 Look for bugs, regressions, missing edge cases, and avoidable complexity.
 
@@ -48,6 +48,8 @@ Improve code only when it preserves behavior and materially improves clarity, sa
 - Preserve exact intended behavior.
 - Do not modify `.sandcastle`.
 - Commit review changes only if you made changes.
+{{VERIFY_STEP}}
+- Do not signal completion with a dirty worktree; commit all verification changes first.
 
 If code is already clean, tested, and safe, do nothing.
 

@@ -31,6 +31,9 @@ RUN set -eux; \
 # Rename the base image's "node" user (UID 1000) to "agent" so bind-mounted
 # worktrees stay writable from both the host and container.
 RUN usermod -d /home/agent -m -l agent node
+RUN mkdir -p /home/agent/.cache /home/agent/.local/share /home/agent/.local/state /home/agent/.config \
+  && chmod 0777 /home/agent \
+  && chmod -R 0777 /home/agent/.cache /home/agent/.local /home/agent/.config
 
 # Install OpenCode CLI as root before switching users.
 RUN npm install -g opencode-ai@latest

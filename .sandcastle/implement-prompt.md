@@ -18,24 +18,27 @@ SOURCE:
 
 {{ISSUE_BODY}}
 
+# PLAN
+
+The planner produced this implementation plan. Follow it unless you find a better approach — if so, explain why.
+
+{{PLAN}}
+
 # CONTEXT
 
-Before implementing behavior changes, use the `tdd` skill. Follow red-green-refactor for this issue.
+Before implementing, use the `tdd` skill. Follow its red-green-refactor workflow for this issue.
 
-Read relevant repo docs before changing code:
+Read the relevant repo docs before changing code:
 
-- `README.md`
-- `TESTING.md`
-- `moon.yml`
-- Relevant crate `Cargo.toml` and nearby tests
+{{REPO_DOCS}}
+
+{{TYPE_SAFETY_RULES}}
 
 Use local code search to find the smallest relevant surface area. Pay close attention to tests near changed code.
 
 # EXECUTION
 
 - Make minimal, surgical changes.
-- Preserve type safety: no unchecked panics, no unnecessary `unwrap`, no broad dynamic typing.
-- Model invalid states explicitly with enums/results where needed.
 - Add deterministic tests for acceptance criteria when behavior changes.
 - Prefer red-green-refactor for bug fixes and behavior changes.
 - Do not modify `.sandcastle`.
@@ -44,14 +47,14 @@ Use local code search to find the smallest relevant surface area. Pay close atte
 
 Run relevant checks before committing. Prefer narrow checks first, then broader checks if practical:
 
-- `cargo test -p <crate>`
-- `cargo nextest run -p <crate>`
-- `moon run :test`
-- `moon run :ci-format :clippy`
+{{FEEDBACK_LOOPS}}
+
+{{VERIFY_STEP}}
 
 # COMMIT
 
 Commit your changes with a concise conventional commit message. If `.jj/` exists, use `jj describe`; otherwise use `git commit`.
+Do not signal completion with a dirty worktree; commit all verification changes first.
 
 If the task cannot be completed, commit only complete safe work and explain blockers in the final output.
 
