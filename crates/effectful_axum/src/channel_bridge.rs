@@ -39,7 +39,7 @@ where
     let ch = ch.clone();
     bind* Effect::new_async(move |env: &mut R| {
       box_future(async move {
-        ch.write(req).run(env).await.unwrap();
+        let _ = ch.write(req).run(env).await;
         match ch.read().run(env).await {
           Ok(Some(resp)) => Ok(resp.into()),
           Ok(None) => Err(StatusCode::SERVICE_UNAVAILABLE.into()),
