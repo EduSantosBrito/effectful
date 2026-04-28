@@ -491,7 +491,7 @@ mod tests {
     std::fs::write(&path, "n = 1\ns = \"a\"").expect("write");
 
     let layer = FigmentLayer::<Cfg>::new(figment::from_toml_file(&path));
-    let cfg = Layer::build(&layer).expect("build");
+    let cfg = layer.build().expect("build");
     assert_eq!(cfg.n, 1);
     assert_eq!(cfg.s, "a");
   }
@@ -567,7 +567,7 @@ port = 3000
     let path = dir.path().join("d.toml");
     std::fs::write(&path, "k = \"v\"").expect("write");
     let layer = FigmentProviderLayer::new(figment::from_toml_file(&path));
-    let prov = Layer::build(&layer).expect("infallible");
+    let prov = layer.build().expect("infallible");
     assert_eq!(config::string(&prov, "k").unwrap(), "v");
   }
 
@@ -576,7 +576,7 @@ port = 3000
     let key = "EFFECT_CONFIG_TEST_LAYER_X";
     with_var(key, Some("42"), || {
       let layer = EnvProviderLayer::from_env();
-      let p = Layer::build(&layer).expect("infallible");
+      let p = layer.build().expect("infallible");
       assert_eq!(config::integer(&p, key).unwrap(), 42);
     });
   }
@@ -751,7 +751,7 @@ bad = [1, 2]
     // figment() accessor
     let _ = layer.figment();
     // build still works
-    let cfg = Layer::build(&layer).expect("build");
+    let cfg = layer.build().expect("build");
     assert_eq!(cfg.n, 3);
   }
 
@@ -765,7 +765,7 @@ bad = [1, 2]
     let shared = Arc::new(figment::from_toml_file(&path));
     let layer = FigmentProviderLayer::from_shared(Arc::clone(&shared));
     let _ = layer.figment();
-    let prov = Layer::build(&layer).expect("infallible");
+    let prov = layer.build().expect("infallible");
     assert_eq!(config::string(&prov, "k").unwrap(), "shared");
   }
 
@@ -779,7 +779,7 @@ bad = [1, 2]
     };
     let layer = EnvProviderLayer::new(opts.clone());
     assert_eq!(layer.options().seq_delim, ";");
-    let p = Layer::build(&layer).expect("infallible");
+    let p = layer.build().expect("infallible");
     assert_eq!(p.seq_delim(), ";");
   }
 }

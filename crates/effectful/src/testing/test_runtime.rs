@@ -274,12 +274,12 @@ where
 mod tests {
   use super::*;
   use crate::scheduling::duration::duration;
-  use crate::{MissingService, Schedule, Service, fail, retry, succeed};
+  use crate::{ContextService, MissingService, Schedule, fail, retry, succeed};
   use rstest::rstest;
   use std::sync::Arc;
   use std::sync::atomic::{AtomicUsize, Ordering};
 
-  #[derive(Clone, Debug, PartialEq, Service)]
+  #[derive(Clone, Debug, PartialEq, effectful::Service)]
   struct TestService {
     value: u32,
   }

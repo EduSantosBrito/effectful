@@ -3,7 +3,7 @@
 //!
 //! Run: `cargo run -p effectful_reqwest --example 030_layer_default_env`
 
-use effectful::Layer;
+use effectful::LayerBuild;
 use effectful::context::{Cons, Context, Nil};
 use effectful_reqwest::{Error, layer_reqwest_client_default, text};
 use effectful_tokio::run_async;

@@ -1,5 +1,5 @@
 //! Ex 032 — `ServiceContext` is the v1 service environment.
-use effectful::{Effect, MissingService, Service, ServiceContext, run_blocking};
+use effectful::{ContextService, Effect, MissingService, Service, ServiceContext, run_blocking};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
 struct Token {

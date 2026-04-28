@@ -251,19 +251,19 @@ where
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::{MissingService, Service, run_blocking};
+  use crate::{ContextService, MissingService, run_blocking};
 
-  #[derive(Clone, Debug, PartialEq, Service)]
+  #[derive(Clone, Debug, PartialEq, effectful::Service)]
   struct Config {
     url: String,
   }
 
-  #[derive(Clone, Debug, PartialEq, Service)]
+  #[derive(Clone, Debug, PartialEq, effectful::Service)]
   struct Database {
     url: String,
   }
 
-  #[derive(Clone, Debug, PartialEq, Service)]
+  #[derive(Clone, Debug, PartialEq, effectful::Service)]
   struct Logger {
     level: String,
   }

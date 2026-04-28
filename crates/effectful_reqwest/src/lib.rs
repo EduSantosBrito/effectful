@@ -411,7 +411,7 @@ where
 mod tests {
   use super::*;
   use effectful::schema;
-  use effectful::{Layer, Scope, run_async, run_blocking, service_env, succeed};
+  use effectful::{LayerBuild, Scope, run_async, run_blocking, service_env, succeed};
   use serde::{Deserialize, Serialize};
   use std::sync::atomic::{AtomicUsize, Ordering};
   use wiremock::matchers::{method, path};

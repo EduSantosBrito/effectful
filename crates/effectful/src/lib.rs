@@ -92,9 +92,13 @@ pub use concurrency::{
   fiber_never, fiber_succeed, interrupt_all, with_fiber_id,
 };
 pub use context::{
-  Cons, Context, Get, GetMut, HasTag, Here, Matcher, MissingService, Nil, Service, ServiceContext,
+  Cons, Context, Get, GetMut, HasTag, Here, Matcher, MissingService, Nil, ServiceContext,
   ServiceLookup, Skip0, Skip1, Skip2, Skip3, Skip4, Tag, Tagged, There, ThereHere, prepend_cell,
   tagged,
+};
+pub use context::Service as ContextService;
+pub use layer::service::{
+  Service, ServiceEnv, layer_service, layer_service_env, provide_service, service, service_env,
 };
 pub use coordination::semaphore::Permit;
 pub use coordination::{

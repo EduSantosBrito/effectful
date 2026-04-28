@@ -1,5 +1,5 @@
 //! Ex 034 — `Effect::provide` supplies services through a `Layer`.
-use effectful::{Effect, Layer, MissingService, Service, ServiceContext, run_blocking};
+use effectful::{ContextService, Effect, Layer, MissingService, Service, ServiceContext, run_blocking};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
 struct Gate {

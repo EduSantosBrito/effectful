@@ -4,7 +4,7 @@
 //!
 //! Run: `devenv shell -- cargo run -p logger --example layer_build`
 
-use ::effectful::{Cons, Context, Effect, Layer, Nil, Service, effect, run_blocking};
+use ::effectful::{Cons, Context, Effect, LayerBuild, Nil, Service, effect, run_blocking};
 use effectful_logger::{EffectLogKey, EffectLogger, EffectLoggerError, layer_effect_logger};
 
 type LogEnv = Context<Cons<Service<EffectLogKey, EffectLogger>, Nil>>;
