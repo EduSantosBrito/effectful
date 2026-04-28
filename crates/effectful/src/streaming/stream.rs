@@ -359,6 +359,11 @@ where
     self
   }
 
+  fn with_stream_cancellation(mut self, cancellation: StreamCancellation) -> Self {
+    self.cancellation = cancellation;
+    self
+  }
+
   /// Pull the next chunk from the stream. `Ok(None)` means the stream is exhausted.
   pub fn poll_next_chunk<'a>(
     &mut self,
@@ -440,10 +445,24 @@ where
             }
             return Ok(Some(Chunk::from_vec(out)));
           }
-          StreamState::Pull(pull) => {
-            let out = pull.poll_next_chunk_with_size(env, chunk_size).await?;
+          StreamState::Pull(_) => {
+            let mut pull = match core::mem::replace(&mut *guard, StreamState::Exhausted) {
+              StreamState::Pull(pull) => pull,
+              _ => return Ok(None),
+            };
+            drop(guard);
+
+            let out = match pull.poll_next_chunk_with_size(env, chunk_size).await {
+              Ok(out) => out,
+              Err(e) => {
+                *state.lock().expect("stream state mutex poisoned") = StreamState::Pull(pull);
+                return Err(e);
+              }
+            };
             if out.is_none() {
-              *guard = StreamState::Exhausted;
+              *state.lock().expect("stream state mutex poisoned") = StreamState::Exhausted;
+            } else {
+              *state.lock().expect("stream state mutex poisoned") = StreamState::Pull(pull);
             }
             let Some(chunk) = out else {
               return Ok(None);
@@ -583,7 +602,7 @@ where
     })
   }
 
-  /// Drains the stream into a single vector (stops early if `R` embeds a cancelled [`CancellationToken`]).
+  /// Drains the stream into a single vector (stops early when attached cancellation is requested).
   #[inline]
   pub fn run_collect(self) -> Effect<Vec<A>, E, R> {
     let mut stream = self;
@@ -699,16 +718,19 @@ where
     B: Send + 'static,
     F: FnMut(A) -> B + 'static,
   {
+    let cancellation = self.cancellation.clone();
     Stream::from_pull(MapPull {
       upstream: self,
       f,
       _output: PhantomData,
     })
+    .with_stream_cancellation(cancellation)
   }
 
   /// Retains elements satisfying `p`.
   #[inline]
   pub fn filter(self, p: Predicate<A>) -> Stream<A, E, R> {
+    let cancellation = self.cancellation.clone();
     Stream::new(move |r: &mut R| {
       Box::pin(async move {
         let mut upstream = self;
@@ -722,11 +744,13 @@ where
         Ok(out)
       })
     })
+    .with_stream_cancellation(cancellation)
   }
 
   /// Yields elements from the start of the stream while `p` holds; ends before the first failure.
   #[inline]
   pub fn take_while(self, p: Predicate<A>) -> Stream<A, E, R> {
+    let cancellation = self.cancellation.clone();
     Stream::new(move |r: &mut R| {
       Box::pin(async move {
         let mut upstream = self;
@@ -745,11 +769,13 @@ where
         Ok(out)
       })
     })
+    .with_stream_cancellation(cancellation)
   }
 
   /// Drops elements from the start while `p` holds, then yields the remainder.
   #[inline]
   pub fn drop_while(self, p: Predicate<A>) -> Stream<A, E, R> {
+    let cancellation = self.cancellation.clone();
     Stream::new(move |r: &mut R| {
       Box::pin(async move {
         let mut upstream = self;
@@ -774,11 +800,13 @@ where
         Ok(out)
       })
     })
+    .with_stream_cancellation(cancellation)
   }
 
   /// At most `n` elements from the start of the stream.
   #[inline]
   pub fn take(self, n: usize) -> Stream<A, E, R> {
+    let cancellation = self.cancellation.clone();
     Stream::new(move |r: &mut R| {
       Box::pin(async move {
         let mut upstream = self;
@@ -798,11 +826,13 @@ where
         Ok(out)
       })
     })
+    .with_stream_cancellation(cancellation)
   }
 
   /// Chunks into vectors of length `size` (last chunk may be shorter; `size == 0` yields empty output).
   #[inline]
   pub fn grouped(self, size: usize) -> Stream<Vec<A>, E, R> {
+    let cancellation = self.cancellation.clone();
     Stream::new(move |r: &mut R| {
       Box::pin(async move {
         if size == 0 {
@@ -828,6 +858,7 @@ where
         Ok(out)
       })
     })
+    .with_stream_cancellation(cancellation)
   }
 
   /// Fan this stream out to `branches` independent consumers via [`PubSub`] (sliding ring of size `n`).
@@ -932,6 +963,7 @@ where
     E2: Send + 'static,
     F: FnMut(A) -> Effect<B, E2, R> + 'static,
   {
+    let cancellation = self.cancellation.clone();
     Stream::new(move |r: &mut R| {
       Box::pin(async move {
         let mut upstream = self;
@@ -947,6 +979,7 @@ where
         Ok(out)
       })
     })
+    .with_stream_cancellation(cancellation)
   }
 
   /// Map each element with `f` with at most `n` concurrent effect runs (via [`Semaphore`]).
@@ -963,6 +996,7 @@ where
     R: Clone + Send + Sync,
     F: Fn(A) -> Effect<B, E, R> + Send + Sync + 'static,
   {
+    let cancellation = self.cancellation.clone();
     let f = Arc::new(f);
     Stream::new(move |r: &mut R| {
       let f = Arc::clone(&f);
@@ -1014,6 +1048,7 @@ where
         Ok(out)
       })
     })
+    .with_stream_cancellation(cancellation)
   }
 
   /// Optional binary reduction over the stream (`None` if empty).
@@ -1053,6 +1088,7 @@ where
     B: Send + 'static,
     F: FnMut(&mut S, A) -> B + 'static,
   {
+    let cancellation = self.cancellation.clone();
     Stream::new(move |r: &mut R| {
       Box::pin(async move {
         let mut upstream = self;
@@ -1069,6 +1105,7 @@ where
         Ok(out)
       })
     })
+    .with_stream_cancellation(cancellation)
   }
 }
 
@@ -1738,6 +1775,18 @@ mod tests {
       token.cancel();
       let stream =
         Stream::from_effect(succeed::<Vec<i32>, (), ()>(vec![1, 2, 3])).with_cancellation(token);
+      let out = block_on(stream.run_collect().run(&mut ()));
+      assert_eq!(out, Ok(Vec::<i32>::new()));
+    }
+
+    #[test]
+    fn run_collect_with_pre_cancelled_token_before_transform_returns_empty_output() {
+      let token = CancellationToken::new();
+      token.cancel();
+      let stream = Stream::from_iterable([1, 2, 3])
+        .with_cancellation(token)
+        .map(|n| n * 2)
+        .filter(Box::new(|n: &i32| *n > 0));
       let out = block_on(stream.run_collect().run(&mut ()));
       assert_eq!(out, Ok(Vec::<i32>::new()));
     }
