@@ -21,12 +21,12 @@ fn main() {
     .init();
 
   let prog: Effect<(), EffectLoggerError, LogCtx> = effect!(|_r: &mut LogCtx| {
-    let logger = bind* EffectLogger;
-    bind* logger.trace("trace step");
-    bind* logger.debug("debug step");
-    bind* logger.info("info step");
-    bind* logger.warn("warn step");
-    bind* logger.error("error step");
+    let logger = bind * EffectLogger;
+    bind * logger.trace("trace step");
+    bind * logger.debug("debug step");
+    bind * logger.info("info step");
+    bind * logger.warn("warn step");
+    bind * logger.error("error step");
   });
 
   run_blocking(prog, build_ctx()).expect("tracing never fails");

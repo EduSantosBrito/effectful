@@ -1,5 +1,5 @@
 //! Ex 020 — `Cons` / `Nil` heterogenous lists form environments.
-use effectful::{Cons, Nil, Tagged, Service};
+use effectful::{Cons, Nil, Service, Tagged};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
 struct AKey;

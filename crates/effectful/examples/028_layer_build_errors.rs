@@ -1,5 +1,5 @@
 //! Ex 028 — Failed layers propagate `Err` from `build`.
-use effectful::{LayerBuild, LayerFn, Tagged, Service};
+use effectful::{LayerBuild, LayerFn, Service, Tagged};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
 struct K;

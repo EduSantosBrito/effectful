@@ -5,9 +5,9 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::routing::Router;
-use http_body_util::BodyExt;
 use effectful::Effect;
 use effectful_axum::routing;
+use http_body_util::BodyExt;
 use std::convert::Infallible;
 use std::time::Duration;
 use tower::ServiceExt;

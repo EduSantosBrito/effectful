@@ -20,11 +20,11 @@ fn main() {
   // Extract the logger once, then use it across multiple steps.
   // bind* succeed(...) binds a pure value; bind* logger.info(...) logs as an effect step.
   let program: Effect<i32, EffectLoggerError, LogCtx> = effect!(|_r: &mut LogCtx| {
-    let logger = bind* EffectLogger;
-    bind* logger.info("first step: log_info via bind* logger");
-    bind* logger.warn("second step: log_warn via bind* logger");
-    let n = bind* succeed::<i32, EffectLoggerError, LogCtx>(21);
-    let m = bind* succeed::<i32, EffectLoggerError, LogCtx>(n * 2);
+    let logger = bind * EffectLogger;
+    bind * logger.info("first step: log_info via bind* logger");
+    bind * logger.warn("second step: log_warn via bind* logger");
+    let n = bind * succeed::<i32, EffectLoggerError, LogCtx>(21);
+    let m = bind * succeed::<i32, EffectLoggerError, LogCtx>(n * 2);
     m
   });
 

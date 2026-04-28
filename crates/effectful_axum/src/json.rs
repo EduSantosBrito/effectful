@@ -93,8 +93,8 @@ mod tests {
   use axum::body::Body;
   use axum::http::Request;
   use axum::routing::post;
-  use http_body_util::BodyExt;
   use effectful::schema;
+  use http_body_util::BodyExt;
   use std::sync::Arc;
   use tower::ServiceExt;
 

@@ -18,9 +18,9 @@ fn main() {
     .init();
 
   let prog: Effect<(), EffectLoggerError, LogR> = effect!(|_r: &mut LogR| {
-    let logger = bind* EffectLogger;
-    bind* logger.info("resolved EffectLogger via Context + provide_service");
-    bind* logger.warn("warn from the same extracted logger");
+    let logger = bind * EffectLogger;
+    bind * logger.info("resolved EffectLogger via Context + provide_service");
+    bind * logger.warn("warn from the same extracted logger");
   });
 
   run_blocking(prog, build_ctx()).expect("EffectLoggerError is never produced by tracing");

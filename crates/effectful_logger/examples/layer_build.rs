@@ -22,8 +22,8 @@ fn main() {
     .init();
 
   let prog: Effect<(), EffectLoggerError, LogEnv> = effect!(|_r: &mut LogEnv| {
-    let logger = bind* EffectLogger;
-    bind* logger.info("logger provided via layer_effect_logger build");
+    let logger = bind * EffectLogger;
+    bind * logger.info("logger provided via layer_effect_logger build");
   });
 
   let result: Result<(), EffectLoggerError> = run_blocking(prog, build_env());

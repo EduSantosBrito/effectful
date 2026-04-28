@@ -4,10 +4,10 @@ use effectful::{effect, run_blocking, succeed};
 fn branch(flag: bool) -> effectful::Effect<i32, (), ()> {
   effect!(|_r: &mut ()| {
     if flag {
-      let x = bind* succeed(40_i32);
+      let x = bind * succeed(40_i32);
       x + 2
     } else {
-      let x = bind* succeed(41_i32);
+      let x = bind * succeed(41_i32);
       x + 1
     }
   })

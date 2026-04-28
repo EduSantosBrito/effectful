@@ -99,7 +99,10 @@ where
 {
   match (&field.key, source) {
     (FieldKey::Object(name), UnknownFieldSource::Object(obj)) => match obj.get(*name) {
-      Some(u) => field.schema.decode_unknown_all(u).map_err(|e| e.prefix(name)),
+      Some(u) => field
+        .schema
+        .decode_unknown_all(u)
+        .map_err(|e| e.prefix(name)),
       None => Err(ParseErrors::one(ParseError::new(
         *name,
         format!("missing field {name}"),
@@ -119,8 +122,11 @@ where
       "expected object source for object field key",
     ))),
     (FieldKey::TupleIndex(idx), _) => Err(ParseErrors::one(
-      ParseError::new("", format!("expected tuple source for tuple field key {idx}"))
-        .prefix_index(*idx),
+      ParseError::new(
+        "",
+        format!("expected tuple source for tuple field key {idx}"),
+      )
+      .prefix_index(*idx),
     )),
   }
 }
@@ -481,7 +487,10 @@ where
         );
         merge_two_field_results(r0, r1)
       }
-      _ => Err(ParseErrors::one(ParseError::new("", "expected array of length 2"))),
+      _ => Err(ParseErrors::one(ParseError::new(
+        "",
+        "expected array of length 2",
+      ))),
     }),
   )
 }
@@ -1365,12 +1374,11 @@ mod tests {
     #[test]
     fn decode_unknown_all_when_both_elements_invalid_returns_all_paths() {
       let s = tuple(i64::<()>(), string::<()>());
-      let u = Unknown::Array(vec![
-        Unknown::String("bad-int".into()),
-        Unknown::I64(2),
-      ]);
+      let u = Unknown::Array(vec![Unknown::String("bad-int".into()), Unknown::I64(2)]);
 
-      let err = s.decode_unknown_all(&u).expect_err("both elements should fail");
+      let err = s
+        .decode_unknown_all(&u)
+        .expect_err("both elements should fail");
 
       assert_eq!(err.issues.len(), 2);
       assert_eq!(err.issues[0].path, "0");
@@ -1427,7 +1435,9 @@ mod tests {
       obj.insert("age".into(), Unknown::String("old".into())); // wrong type
       let u = Unknown::Array(vec![Unknown::Object(obj), Unknown::String("bad".into())]);
 
-      let err = s.decode_unknown_all(&u).expect_err("all elements should fail");
+      let err = s
+        .decode_unknown_all(&u)
+        .expect_err("all elements should fail");
 
       assert_eq!(err.issues.len(), 3);
       assert_eq!(err.issues[0].path, "0.name");

@@ -543,9 +543,7 @@ mod tests {
     let ch = run_effect_async(QueueChannel::<u32, u32, ()>::duplex_unbounded(), ())
       .await
       .expect("duplex channel");
-    run_effect_async(ch.shutdown(), ())
-      .await
-      .expect("shutdown");
+    run_effect_async(ch.shutdown(), ()).await.expect("shutdown");
     let mut svc = ChannelService::new((), ch);
     let result = tokio::time::timeout(
       std::time::Duration::from_secs(1),

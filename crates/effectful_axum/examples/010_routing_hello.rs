@@ -5,10 +5,10 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::routing::Router;
-use http_body_util::BodyExt;
 use effectful::Effect;
 use effectful::succeed;
 use effectful_axum::routing;
+use http_body_util::BodyExt;
 use std::convert::Infallible;
 use tower::ServiceExt;
 

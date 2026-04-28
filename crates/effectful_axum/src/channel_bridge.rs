@@ -13,9 +13,9 @@
 use axum::body::{Body, Bytes};
 use axum::http::{Request, Response, StatusCode};
 use axum::response::{IntoResponse, Response as AxumResponse};
-use http_body_util::BodyExt;
 use effectful::channel::QueueChannel;
 use effectful::{Effect, QueueError, box_future, effect};
+use http_body_util::BodyExt;
 
 #[inline]
 fn map_queue_error(e: QueueError) -> StatusCode {
@@ -37,16 +37,20 @@ where
 {
   effect!(|r: &mut R| {
     let ch = ch.clone();
-    bind* Effect::new_async(move |env: &mut R| {
-      box_future(async move {
-        ch.write(req).run(env).await.map_err(|qe| map_queue_error(qe).into())?;
-        match ch.read().run(env).await {
-          Ok(Some(resp)) => Ok(resp.into()),
-          Ok(None) => Err(StatusCode::SERVICE_UNAVAILABLE.into()),
-          Err(qe) => Err(map_queue_error(qe).into()),
-        }
+    bind
+      * Effect::new_async(move |env: &mut R| {
+        box_future(async move {
+          ch.write(req)
+            .run(env)
+            .await
+            .map_err(|qe| map_queue_error(qe).into())?;
+          match ch.read().run(env).await {
+            Ok(Some(resp)) => Ok(resp.into()),
+            Ok(None) => Err(StatusCode::SERVICE_UNAVAILABLE.into()),
+            Err(qe) => Err(map_queue_error(qe).into()),
+          }
+        })
       })
-    })
   })
 }
 

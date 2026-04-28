@@ -469,11 +469,7 @@ mod tests {
 
     #[test]
     fn decode_unknown_all_single_arm_preserves_diagnostic() {
-      let s = union_chain(vec![filter(
-        i64_unknown_wire::<()>(),
-        |_| false,
-        "never",
-      )]);
+      let s = union_chain(vec![filter(i64_unknown_wire::<()>(), |_| false, "never")]);
 
       let err = s
         .decode_unknown_all(&Unknown::I64(1))

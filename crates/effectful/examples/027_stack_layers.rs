@@ -1,5 +1,5 @@
 //! Ex 027 — `Stack` composes layers into an HList.
-use effectful::{Cons, LayerBuild, LayerFn, Nil, Stack, Tagged, Service};
+use effectful::{Cons, LayerBuild, LayerFn, Nil, Service, Stack, Tagged};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
 struct AKey;

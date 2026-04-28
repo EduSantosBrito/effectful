@@ -1,5 +1,5 @@
 //! Ex 023 — `get_path` follows `ThereHere` / `Skip` paths.
-use effectful::{ThereHere, Service, ctx};
+use effectful::{Service, ThereHere, ctx};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
 struct FirstKey;

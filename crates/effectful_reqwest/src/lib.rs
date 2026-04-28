@@ -163,18 +163,18 @@ where
 {
   effect!(|r: &mut R| {
     let pool = Get::<ReqwestPoolKey>::get(r).clone();
-    let (pooled, scope) = bind* from_async(move |_r| async move {
-      let mut scope = Scope::make();
-      let pooled = pool
-        .get()
-        .run(&mut scope)
-        .await
-        .expect("pool factory is infallible");
-      Ok::<(PooledClient, Scope), E>((pooled, scope))
-    });
-    let resp = bind* from_async(move |_r| async move {
-      build(&pooled).send().await.map_err(E::from)
-    });
+    let (pooled, scope) = bind
+      * from_async(move |_r| async move {
+        let mut scope = Scope::make();
+        let pooled = pool
+          .get()
+          .run(&mut scope)
+          .await
+          .expect("pool factory is infallible");
+        Ok::<(PooledClient, Scope), E>((pooled, scope))
+      });
+    let resp =
+      bind * from_async(move |_r| async move { build(&pooled).send().await.map_err(E::from) });
     scope.close();
     A::from(resp)
   })
@@ -225,15 +225,15 @@ where
   effect!(|r: &mut R| {
     let client = Get::<ReqwestClientKey>::get(r).clone();
     let schema_arc = Arc::clone(&schema);
-    let resp = bind* from_async(move |_r| async move {
-      build(&client).send().await.map_err(JsonSchemaError::Http)
-    });
-    let buf = bind* from_async(move |_r| async move {
-      resp.bytes().await.map_err(JsonSchemaError::Http)
-    });
+    let resp = bind
+      * from_async(
+        move |_r| async move { build(&client).send().await.map_err(JsonSchemaError::Http) },
+      );
+    let buf =
+      bind * from_async(move |_r| async move { resp.bytes().await.map_err(JsonSchemaError::Http) });
     match decode_response_schema(&schema_arc, &buf) {
       Ok(v) => v,
-      Err(e) => bind* fail::<A, JsonSchemaError, R>(e),
+      Err(e) => bind * fail::<A, JsonSchemaError, R>(e),
     }
   })
 }
@@ -249,13 +249,10 @@ where
 {
   effect!(|r: &mut R| {
     let client = Get::<ReqwestClientKey>::get(r).clone();
-    bind* from_async(move |_r| async move {
-      build(&client)
-        .send()
-        .await
-        .map_err(E::from)
-        .map(A::from)
-    })
+    bind
+      * from_async(
+        move |_r| async move { build(&client).send().await.map_err(E::from).map(A::from) },
+      )
   })
 }
 
@@ -270,12 +267,9 @@ where
 {
   effect!(|r: &mut R| {
     let client = Get::<ReqwestClientKey>::get(r).clone();
-    let resp = bind* from_async(move |_r| async move {
-      build(&client).send().await.map_err(E::from)
-    });
-    let body = bind* from_async(move |_r| async move {
-      resp.text().await.map_err(E::from)
-    });
+    let resp =
+      bind * from_async(move |_r| async move { build(&client).send().await.map_err(E::from) });
+    let body = bind * from_async(move |_r| async move { resp.text().await.map_err(E::from) });
     A::from(body)
   })
 }
@@ -291,12 +285,9 @@ where
 {
   effect!(|r: &mut R| {
     let client = Get::<ReqwestClientKey>::get(r).clone();
-    let resp = bind* from_async(move |_r| async move {
-      build(&client).send().await.map_err(E::from)
-    });
-    let body = bind* from_async(move |_r| async move {
-      resp.bytes().await.map_err(E::from)
-    });
+    let resp =
+      bind * from_async(move |_r| async move { build(&client).send().await.map_err(E::from) });
+    let body = bind * from_async(move |_r| async move { resp.bytes().await.map_err(E::from) });
     A::from(body)
   })
 }
@@ -313,12 +304,9 @@ where
 {
   effect!(|r: &mut R| {
     let client = Get::<ReqwestClientKey>::get(r).clone();
-    let resp = bind* from_async(move |_r| async move {
-      build(&client).send().await.map_err(E::from)
-    });
-    let value = bind* from_async(move |_r| async move {
-      resp.json::<T>().await.map_err(E::from)
-    });
+    let resp =
+      bind * from_async(move |_r| async move { build(&client).send().await.map_err(E::from) });
+    let value = bind * from_async(move |_r| async move { resp.json::<T>().await.map_err(E::from) });
     A::from(value)
   })
 }
@@ -332,7 +320,7 @@ where
   R: NeedsReqwestClient + 'static,
 {
   effect!(|_r: &mut R| {
-    let x = bind* send(move |c| c.get(url));
+    let x = bind * send(move |c| c.get(url));
     x
   })
 }
@@ -346,7 +334,7 @@ where
   R: NeedsReqwestClient + 'static,
 {
   effect!(|_r: &mut R| {
-    let x = bind* send(move |c| c.post(url));
+    let x = bind * send(move |c| c.post(url));
     x
   })
 }
@@ -360,7 +348,7 @@ where
   R: NeedsReqwestClient + 'static,
 {
   effect!(|_r: &mut R| {
-    let x = bind* send(move |c| c.put(url));
+    let x = bind * send(move |c| c.put(url));
     x
   })
 }
@@ -374,7 +362,7 @@ where
   R: NeedsReqwestClient + 'static,
 {
   effect!(|_r: &mut R| {
-    let x = bind* send(move |c| c.delete(url));
+    let x = bind * send(move |c| c.delete(url));
     x
   })
 }
@@ -388,7 +376,7 @@ where
   R: NeedsReqwestClient + 'static,
 {
   effect!(|_r: &mut R| {
-    let x = bind* send(move |c| c.head(url));
+    let x = bind * send(move |c| c.head(url));
     x
   })
 }
@@ -402,7 +390,7 @@ where
   R: NeedsReqwestClient + 'static,
 {
   effect!(|_r: &mut R| {
-    let x = bind* send(move |c| c.patch(url));
+    let x = bind * send(move |c| c.patch(url));
     x
   })
 }

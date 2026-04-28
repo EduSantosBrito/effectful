@@ -902,7 +902,12 @@ where
           match q.offer(out.clone()).run(&mut ()).await {
             Ok(true) => return Ok(()),
             Ok(false) => {
-              if q.is_shutdown().run(&mut ()).await.expect("Queue::is_shutdown is infallible") {
+              if q
+                .is_shutdown()
+                .run(&mut ())
+                .await
+                .expect("Queue::is_shutdown is infallible")
+              {
                 return Err(QueueError::Disconnected);
               }
               tokio::task::yield_now().await;
@@ -1023,10 +1028,7 @@ mod tests {
     let q = block_on_effect(Queue::<i32>::unbounded()).expect("q");
     let qc = QueueChannel::from_queue_and_map(q, |x: i32| x * 10);
     block_on_effect(qc.shutdown()).expect("shutdown");
-    assert_eq!(
-      block_on_effect(qc.write(2)),
-      Err(QueueError::Disconnected)
-    );
+    assert_eq!(block_on_effect(qc.write(2)), Err(QueueError::Disconnected));
   }
 
   // ── from_fold / fold_state / consume_stream ───────────────────────────────

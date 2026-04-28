@@ -275,9 +275,7 @@ mod tests {
       trace_flags: TraceFlags::SAMPLED,
     };
     assert_eq!(
-      SpanContext::from_traceparent(
-        "00-ABABABABABABABABABABABABABABABAB-CDCDCDCDCDCDCDCD-01"
-      ),
+      SpanContext::from_traceparent("00-ABABABABABABABABABABABABABABABAB-CDCDCDCDCDCDCDCD-01"),
       Ok(context)
     );
   }
@@ -290,9 +288,7 @@ mod tests {
       trace_flags: TraceFlags::DEFAULT,
     };
     assert_eq!(
-      SpanContext::from_traceparent(
-        "00-01010101010101010101010101010101-0202020202020202-00"
-      ),
+      SpanContext::from_traceparent("00-01010101010101010101010101010101-0202020202020202-00"),
       Ok(context)
     );
   }
@@ -330,7 +326,10 @@ mod tests {
 
   #[test]
   fn span_id_display_renders_lowercase_hex() {
-    assert_eq!(SpanId::from_bytes([0xCD; 8]).to_string(), "cdcdcdcdcdcdcdcd");
+    assert_eq!(
+      SpanId::from_bytes([0xCD; 8]).to_string(),
+      "cdcdcdcdcdcdcdcd"
+    );
   }
 
   #[test]

@@ -1,5 +1,5 @@
 //! Ex 026 — `LayerFn` builds one layer cell.
-use effectful::{LayerBuild, LayerFn, Tagged, Service};
+use effectful::{LayerBuild, LayerFn, Service, Tagged};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
 struct SeedKey;

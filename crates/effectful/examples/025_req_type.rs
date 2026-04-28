@@ -1,5 +1,5 @@
 //! Ex 025 — `req!` names the environment type for services.
-use effectful::{Get, ThereHere, Service, ctx, effect, req, run_blocking};
+use effectful::{Get, Service, ThereHere, ctx, effect, req, run_blocking};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
 struct HostKey;
@@ -10,8 +10,8 @@ type Env = req!(HostKey: &'static str | PortKey: u16);
 
 fn main() {
   let read = effect!(|r: &mut Env| {
-    let host = bind* Ok::<_, ()>(*Get::<HostKey>::get(r));
-    let port = bind* Ok::<_, ()>(*r.get_path::<PortKey, ThereHere>());
+    let host = bind * Ok::<_, ()>(*Get::<HostKey>::get(r));
+    let port = bind * Ok::<_, ()>(*r.get_path::<PortKey, ThereHere>());
     format!("{host}:{port}")
   });
   let env = ctx!(HostKey => "127.0.0.1", PortKey => 9000_u16);

@@ -1,5 +1,5 @@
 //! Ex 019 — `Tagged` associates a key type with a runtime value.
-use effectful::{Tagged, Service};
+use effectful::{Service, Tagged};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
 struct TokenKey;

@@ -1,8 +1,8 @@
 //! Root compatibility tests: verify that downstream crate API contracts are preserved.
 
 use effectful::{
-  Cons, Context, Effect, LayerBuild, Nil, Service, layer_service, layer_service_env, provide_service,
-  service, service_env,
+  Cons, Context, Effect, LayerBuild, Nil, Service, layer_service, layer_service_env,
+  provide_service, service, service_env,
 };
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────

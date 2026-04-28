@@ -19,10 +19,10 @@ fn main() {
     .init();
 
   let program: Effect<i32, EffectLoggerError, LogCtx> = effect!(|_r: &mut LogCtx| {
-    let logger = bind* EffectLogger;
-    let seed = bind* succeed::<i32, EffectLoggerError, LogCtx>(6);
+    let logger = bind * EffectLogger;
+    let seed = bind * succeed::<i32, EffectLoggerError, LogCtx>(6);
     if seed > 0 {
-      bind* logger.info("seed is positive");
+      bind * logger.info("seed is positive");
     }
     seed * 7
   });

@@ -47,13 +47,14 @@ where
   effect!(|r: &mut R| {
     let inner = inner;
     let provider = provider.clone();
-    let out = bind* Effect::new_async(move |env| {
-      box_future(async move {
-        AMBIENT_STACK.with(|s| s.borrow_mut().push(provider.clone()));
-        let _guard = AmbientPopGuard;
-        inner.run(env).await
-      })
-    });
+    let out = bind
+      * Effect::new_async(move |env| {
+        box_future(async move {
+          AMBIENT_STACK.with(|s| s.borrow_mut().push(provider.clone()));
+          let _guard = AmbientPopGuard;
+          inner.run(env).await
+        })
+      });
     out
   })
 }
