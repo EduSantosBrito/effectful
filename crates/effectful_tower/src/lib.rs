@@ -364,7 +364,7 @@ where
 {
   Effect::new_async(move |r: &mut S| {
     box_future(async move {
-      let _ = ch.write(req).run(r).await;
+      ch.write(req).run(r).await?;
       match ch.read().run(r).await {
         Ok(Some(x)) => Ok(x),
         Ok(None) => Err(QueueError::Disconnected),
@@ -536,5 +536,22 @@ mod tests {
       .expect("duplex channel");
     let mut svc = ChannelService::new((), ch);
     assert_eq!(svc.ready().await.unwrap().call(42).await, Ok(42));
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn tower_channel_service_returns_queue_error_when_write_queue_closed() {
+    let ch = run_effect_async(QueueChannel::<u32, u32, ()>::duplex_unbounded(), ())
+      .await
+      .expect("duplex channel");
+    run_effect_async(ch.shutdown(), ())
+      .await
+      .expect("shutdown");
+    let mut svc = ChannelService::new((), ch);
+    let result = tokio::time::timeout(
+      std::time::Duration::from_secs(1),
+      svc.ready().await.unwrap().call(41),
+    )
+    .await;
+    assert_eq!(result, Ok(Err(QueueError::Disconnected)));
   }
 }

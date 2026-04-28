@@ -890,8 +890,9 @@ where
     })
   }
 
-  /// Enqueue one mapped element.
-  pub fn write(&self, value: InElem) -> Effect<(), (), R> {
+  /// Enqueue one mapped element. Fails with [`QueueError::Disconnected`] when the backing queue
+  /// has been shut down.
+  pub fn write(&self, value: InElem) -> Effect<(), QueueError, R> {
     let inner = self.inner.clone();
     Effect::new_async(move |_env: &mut R| {
       let out = (inner.map_in)(value);
@@ -900,7 +901,12 @@ where
         loop {
           match q.offer(out.clone()).run(&mut ()).await {
             Ok(true) => return Ok(()),
-            Ok(false) => tokio::task::yield_now().await,
+            Ok(false) => {
+              if q.is_shutdown().run(&mut ()).await.expect("Queue::is_shutdown is infallible") {
+                return Err(QueueError::Disconnected);
+              }
+              tokio::task::yield_now().await;
+            }
             Err(()) => unreachable!("Queue::offer is infallible"),
           }
         }
@@ -1010,6 +1016,17 @@ mod tests {
     let stream = qc.to_stream();
     let got = block_on_effect(stream.run_collect()).expect("collect");
     assert_eq!(got, vec![1, 2]);
+  }
+
+  #[test]
+  fn queue_channel_write_after_shutdown_returns_queue_error() {
+    let q = block_on_effect(Queue::<i32>::unbounded()).expect("q");
+    let qc = QueueChannel::from_queue_and_map(q, |x: i32| x * 10);
+    block_on_effect(qc.shutdown()).expect("shutdown");
+    assert_eq!(
+      block_on_effect(qc.write(2)),
+      Err(QueueError::Disconnected)
+    );
   }
 
   // ── from_fold / fold_state / consume_stream ───────────────────────────────
