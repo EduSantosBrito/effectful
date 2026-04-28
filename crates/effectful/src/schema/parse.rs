@@ -726,20 +726,33 @@ where
   let primary = primary.clone();
   let fallback_dec = fallback.clone();
   let fallback_du = fallback.clone();
+  let fallback_all = fallback.clone();
   let primary_enc = primary.clone();
   let primary_du = primary.clone();
-  Schema::make(
+  let primary_all = primary.clone();
+  Schema::make_with_decode_unknown_all(
     move |u: Unknown| {
       primary
         .decode(u.clone())
         .or_else(|_| fallback_dec.decode(u))
     },
     move |a| primary_enc.encode(a),
-    move |u| {
+    Arc::new(move |u| {
       primary_du
         .decode_unknown(u)
         .or_else(|_| fallback_du.decode_unknown(u))
-    },
+    }),
+    Arc::new(move |u| match primary_all.decode_unknown_all(u) {
+      Ok(a) => Ok(a),
+      Err(primary_err) => match fallback_all.decode_unknown_all(u) {
+        Ok(a) => Ok(a),
+        Err(fallback_err) => {
+          let mut issues = primary_err.prefix("0").issues;
+          issues.extend(fallback_err.prefix("1").issues);
+          Err(ParseErrors::new(issues))
+        }
+      },
+    }),
   )
 }
 
@@ -1091,6 +1104,24 @@ mod tests {
       let s = union_(primary, fallback);
       assert_eq!(s.decode_unknown(&Unknown::I64(-1)).unwrap(), -1);
       assert_eq!(s.decode_unknown(&Unknown::I64(5)).unwrap(), 5);
+    }
+
+    #[test]
+    fn union_decode_unknown_all_when_all_arms_fail_preserves_arm_diagnostics() {
+      let primary = filter(i64_unknown_wire::<()>(), |n| *n > 0, "positive");
+      let fallback = filter(i64_unknown_wire::<()>(), |n| *n < 0, "negative");
+      let s = union_(primary, fallback);
+
+      let err = s
+        .decode_unknown_all(&Unknown::I64(0))
+        .expect_err("both arms reject zero");
+
+      assert_eq!(err.issues.len(), 2);
+      assert_eq!(err.issues[0].path, "0");
+      assert_eq!(err.issues[0].message, "positive");
+      assert_eq!(err.issues[1].path, "1");
+      assert_eq!(err.issues[1].message, "negative");
+      assert_eq!(err.to_string(), "0: positive\n1: negative");
     }
   }
 
