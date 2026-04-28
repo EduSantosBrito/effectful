@@ -122,8 +122,11 @@ impl<O, E> TypedLayer<O, E> {
   where
     E: From<LayerError>,
   {
-    let available: HashSet<String> =
-      ctx.service_names().into_iter().map(|s| s.to_string()).collect();
+    let available: HashSet<String> = ctx
+      .service_names()
+      .into_iter()
+      .map(|s| s.to_string())
+      .collect();
     let mut missing: Vec<String> = self
       .requires
       .iter()
