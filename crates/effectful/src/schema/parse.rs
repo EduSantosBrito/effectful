@@ -1380,6 +1380,22 @@ mod tests {
     }
 
     #[test]
+    fn decode_unknown_all_when_only_first_element_invalid_returns_one_error() {
+      let s = tuple(i64::<()>(), string::<()>());
+      let u = Unknown::Array(vec![
+        Unknown::String("bad-int".into()),
+        Unknown::String("hi".into()),
+      ]);
+
+      let err = s
+        .decode_unknown_all(&u)
+        .expect_err("first element should fail");
+      assert_eq!(err.issues.len(), 1);
+      assert_eq!(err.issues[0].path, "0");
+      assert!(err.issues[0].message.contains("expected i64"));
+    }
+
+    #[test]
     fn decode_unknown_all_non_array_fails() {
       let s = tuple(i64::<()>(), string::<()>());
       let err = s
