@@ -73,6 +73,79 @@ type BoxEncode<A, I> = Arc<dyn Fn(A) -> I + Send + Sync>;
 type BoxDecodeUnknown<A> = Arc<dyn Fn(&Unknown) -> Result<A, ParseError> + Send + Sync>;
 type BoxDecodeUnknownAll<A> = Arc<dyn Fn(&Unknown) -> Result<A, ParseErrors> + Send + Sync>;
 
+#[allow(dead_code)]
+enum FieldKey {
+  Object(&'static str),
+  TupleIndex(usize),
+}
+
+struct FieldSpec<A, I, E> {
+  key: FieldKey,
+  schema: Schema<A, I, E>,
+}
+
+#[allow(dead_code)]
+enum UnknownFieldSource<'a> {
+  Object(&'a BTreeMap<String, Unknown>),
+  Tuple(&'a [Unknown]),
+}
+
+fn decode_unknown_field_all<A, I, E>(
+  source: UnknownFieldSource<'_>,
+  field: &FieldSpec<A, I, E>,
+) -> Result<A, ParseErrors>
+where
+  E: EffectData + 'static,
+  A: 'static,
+  I: 'static,
+{
+  match (&field.key, source) {
+    (FieldKey::Object(name), UnknownFieldSource::Object(obj)) => match obj.get(*name) {
+      Some(u) => field.schema.decode_unknown_all(u).map_err(|e| e.prefix(name)),
+      None => Err(ParseErrors::one(ParseError::new(
+        *name,
+        format!("missing field {name}"),
+      ))),
+    },
+    (FieldKey::TupleIndex(idx), UnknownFieldSource::Tuple(arr)) => match arr.get(*idx) {
+      Some(u) => field
+        .schema
+        .decode_unknown_all(u)
+        .map_err(|e| e.prefix(&idx.to_string())),
+      None => Err(ParseErrors::one(
+        ParseError::new("", format!("missing index {idx}")).prefix_index(*idx),
+      )),
+    },
+    (FieldKey::Object(name), _) => Err(ParseErrors::one(ParseError::new(
+      *name,
+      "expected object source for object field key",
+    ))),
+    (FieldKey::TupleIndex(idx), _) => Err(ParseErrors::one(
+      ParseError::new("", format!("expected tuple source for tuple field key {idx}"))
+        .prefix_index(*idx),
+    )),
+  }
+}
+
+fn merge_two_field_results<A0, A1>(
+  r0: Result<A0, ParseErrors>,
+  r1: Result<A1, ParseErrors>,
+) -> Result<(A0, A1), ParseErrors> {
+  match (r0, r1) {
+    (Ok(a0), Ok(a1)) => Ok((a0, a1)),
+    (left, right) => {
+      let mut issues = Vec::new();
+      if let Err(err) = left {
+        issues.extend(err.issues);
+      }
+      if let Err(err) = right {
+        issues.extend(err.issues);
+      }
+      Err(ParseErrors::new(issues))
+    }
+  }
+}
+
 /// Bidirectional schema: semantic `A`, wire/intermediate `I`, phantom `E` ([`EffectData`] tag).
 pub struct Schema<A, I, E = ()> {
   phantom: PhantomData<fn() -> E>,
@@ -514,11 +587,9 @@ where
   let s0_d = s0.clone();
   let s0_e = s0.clone();
   let s0_u = s0.clone();
-  let s0_all = s0.clone();
   let s1_d = s1.clone();
   let s1_e = s1.clone();
   let s1_u = s1.clone();
-  let s1_all = s1.clone();
   let decode_unknown: BoxDecodeUnknown<(A0, A1)> = Arc::new(move |u| {
     let obj = match u {
       Unknown::Object(m) => m,
@@ -547,35 +618,21 @@ where
         Unknown::Object(m) => m,
         _ => return Err(ParseErrors::one(ParseError::new("", "expected object"))),
       };
-
-      let r0 = match obj.get(name0) {
-        Some(u0) => s0_all.decode_unknown_all(u0).map_err(|e| e.prefix(name0)),
-        None => Err(ParseErrors::one(ParseError::new(
-          name0,
-          format!("missing field {name0}"),
-        ))),
-      };
-      let r1 = match obj.get(name1) {
-        Some(u1) => s1_all.decode_unknown_all(u1).map_err(|e| e.prefix(name1)),
-        None => Err(ParseErrors::one(ParseError::new(
-          name1,
-          format!("missing field {name1}"),
-        ))),
-      };
-
-      match (r0, r1) {
-        (Ok(a0), Ok(a1)) => Ok((a0, a1)),
-        (left, right) => {
-          let mut issues = Vec::new();
-          if let Err(err) = left {
-            issues.extend(err.issues);
-          }
-          if let Err(err) = right {
-            issues.extend(err.issues);
-          }
-          Err(ParseErrors::new(issues))
-        }
-      }
+      let r0 = decode_unknown_field_all(
+        UnknownFieldSource::Object(obj),
+        &FieldSpec {
+          key: FieldKey::Object(name0),
+          schema: s0.clone(),
+        },
+      );
+      let r1 = decode_unknown_field_all(
+        UnknownFieldSource::Object(obj),
+        &FieldSpec {
+          key: FieldKey::Object(name1),
+          schema: s1.clone(),
+        },
+      );
+      merge_two_field_results(r0, r1)
     }),
   )
 }
@@ -837,6 +894,20 @@ mod tests {
       let err = s
         .decode_unknown_all(&Unknown::Object(m))
         .expect_err("both fields should fail");
+
+      assert_eq!(err.issues.len(), 2);
+      assert_eq!(err.issues[0].path, "name");
+      assert_eq!(err.issues[1].path, "age");
+    }
+
+    #[test]
+    fn decode_unknown_all_when_both_fields_missing_returns_all_paths() {
+      let s = person_schema();
+      let m = BTreeMap::new();
+
+      let err = s
+        .decode_unknown_all(&Unknown::Object(m))
+        .expect_err("both fields should be missing");
 
       assert_eq!(err.issues.len(), 2);
       assert_eq!(err.issues[0].path, "name");
