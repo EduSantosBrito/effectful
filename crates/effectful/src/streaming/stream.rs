@@ -6,9 +6,7 @@
 //! [`Stream::from_channel`] / [`crate::coordination::channel::Channel::to_stream`].
 //! Duplex [`crate::coordination::channel::QueueChannel`]`<A, A, _>` uses [`Stream::from_duplex_queue_channel`] /
 //! [`crate::coordination::channel::QueueChannel::to_stream`] with [`QueueError`] (call
-//! [`crate::coordination::channel::QueueChannel::shutdown`] to end a drain). A dedicated
-//! incremental `StreamState` arm is deferred while `Stream` stays generic over `E` without a
-//! `QueueError` error channel.
+//! [`crate::coordination::channel::QueueChannel::shutdown`] to end a drain).
 
 use crate::collections::sorted_map::EffectSortedMap;
 use crate::coordination::pubsub::PubSub;
@@ -18,7 +16,6 @@ use crate::observability::metric::Metric;
 use crate::resource::scope::Scope;
 use crate::runtime::CancellationToken;
 use crate::{Chunk, Effect, Or, Predicate};
-use core::any::Any;
 use core::fmt;
 use core::marker::PhantomData;
 use futures::stream::{self, StreamExt};
@@ -74,6 +71,87 @@ where
   }
 }
 
+enum PullTerminal {
+  Active,
+  Closed,
+}
+
+struct ChannelQueuePull<A, E>
+where
+  A: Send + 'static,
+  E: Send + 'static,
+{
+  queue: Queue<ChannelMessage<A, E>>,
+  buffered: VecDeque<A>,
+  terminal: PullTerminal,
+}
+
+impl<A, E, R> PullStream<A, E, R> for ChannelQueuePull<A, E>
+where
+  A: Send + 'static,
+  E: Send + 'static,
+  R: 'static,
+{
+  fn poll_next_chunk_with_size<'a>(
+    &'a mut self,
+    _env: &'a mut R,
+    chunk_size: usize,
+  ) -> crate::kernel::BoxFuture<'a, Result<Option<Chunk<A>>, E>> {
+    Box::pin(async move {
+      loop {
+        if !self.buffered.is_empty() {
+          let count = self.buffered.len().min(chunk_size);
+          let mut out = Vec::with_capacity(count);
+          for _ in 0..count {
+            if let Some(v) = self.buffered.pop_front() {
+              out.push(v);
+            }
+          }
+          return Ok(Some(Chunk::from_vec(out)));
+        }
+
+        match self.terminal {
+          PullTerminal::Closed => return Ok(None),
+          PullTerminal::Active => match self.queue.take().run(&mut ()).await {
+            Ok(ChannelMessage::Chunk(chunk)) => self.buffered.extend(chunk.into_vec()),
+            Ok(ChannelMessage::End) | Err(QueueError::Disconnected) => {
+              self.terminal = PullTerminal::Closed;
+            }
+            Ok(ChannelMessage::Fail(error)) => return Err(error),
+          },
+        }
+      }
+    })
+  }
+}
+
+struct QueueChannelPull<A, R>
+where
+  A: Send + Clone + 'static,
+  R: 'static,
+{
+  ch: crate::coordination::channel::QueueChannel<A, A, R>,
+}
+
+impl<A, R> PullStream<A, QueueError, R> for QueueChannelPull<A, R>
+where
+  A: Send + Clone + 'static,
+  R: 'static,
+{
+  fn poll_next_chunk_with_size<'a>(
+    &'a mut self,
+    env: &'a mut R,
+    _chunk_size: usize,
+  ) -> crate::kernel::BoxFuture<'a, Result<Option<Chunk<A>>, QueueError>> {
+    Box::pin(async move {
+      match self.ch.read().run(env).await? {
+        Some(item) => Ok(Some(Chunk::from_vec(vec![item]))),
+        None => Ok(None),
+      }
+    })
+  }
+}
+
 /// Ordered window-start → aggregation state, for time-keyed stream operators (tumbling / sliding).
 pub type TimeBucketMap<A> = EffectSortedMap<Instant, A>;
 
@@ -95,11 +173,6 @@ where
   R: 'static,
 {
   Pending(Option<Box<dyn FnOnce(&mut R) -> crate::kernel::BoxFuture<'_, Result<Vec<A>, E>>>>),
-  Channel {
-    queue: Queue<ChannelMessage<A, E>>,
-    buffered: VecDeque<A>,
-    closed: bool,
-  },
   /// Items from a [`Queue<A>`] (e.g. [`PubSub::subscribe`]); optional upstream error in `shared_fail`.
   DirectQueue {
     queue: Queue<A>,
@@ -219,6 +292,22 @@ where
   state: Arc<Mutex<StreamState<A, E, R>>>,
   /// When set, [`Stream::poll_next_chunk`] increments this counter by the number of items in each yielded chunk (for throughput / element-rate observability).
   throughput: Option<Metric<u64, ()>>,
+  cancellation: StreamCancellation,
+}
+
+#[derive(Clone)]
+enum StreamCancellation {
+  None,
+  Token(CancellationToken),
+}
+
+impl StreamCancellation {
+  fn is_cancelled(&self) -> bool {
+    match self {
+      StreamCancellation::None => false,
+      StreamCancellation::Token(token) => token.is_cancelled(),
+    }
+  }
 }
 
 /// Compatibility facade preserving the v1 public stream type name.
@@ -242,6 +331,7 @@ where
     Self {
       state: Arc::new(Mutex::new(StreamState::Pending(Some(Box::new(f))))),
       throughput: None,
+      cancellation: StreamCancellation::None,
     }
   }
 
@@ -249,6 +339,7 @@ where
     Self {
       state: Arc::new(Mutex::new(StreamState::Pull(Box::new(pull)))),
       throughput: None,
+      cancellation: StreamCancellation::None,
     }
   }
 
@@ -258,6 +349,13 @@ where
   #[must_use]
   pub fn with_throughput_metric(mut self, metric: Metric<u64, ()>) -> Self {
     self.throughput = Some(metric);
+    self
+  }
+
+  /// Stop stream consumers when `token` is cancelled.
+  #[must_use]
+  pub fn with_cancellation(mut self, token: CancellationToken) -> Self {
+    self.cancellation = StreamCancellation::Token(token);
     self
   }
 
@@ -287,51 +385,6 @@ where
       loop {
         let mut guard = state.lock().expect("stream state mutex poisoned");
         match &mut *guard {
-          StreamState::Channel {
-            queue,
-            buffered,
-            closed,
-          } => {
-            if buffered.is_empty() && !*closed {
-              let q = queue.clone();
-              drop(guard);
-              let message = q.take().run(&mut ()).await;
-              let mut guard = state.lock().expect("stream state mutex poisoned");
-              match &mut *guard {
-                StreamState::Channel {
-                  buffered, closed, ..
-                } => match message {
-                  Ok(ChannelMessage::Chunk(chunk)) => buffered.extend(chunk.into_vec()),
-                  Ok(ChannelMessage::End) => *closed = true,
-                  Ok(ChannelMessage::Fail(error)) => return Err(error),
-                  Err(QueueError::Disconnected) => *closed = true,
-                },
-                _ => return Ok(None),
-              }
-              continue;
-            }
-
-            if buffered.is_empty() && *closed {
-              *guard = StreamState::Exhausted;
-              return Ok(None);
-            }
-
-            let count = buffered.len().min(chunk_size);
-            let mut out = Vec::with_capacity(count);
-            for _ in 0..count {
-              if let Some(v) = buffered.pop_front() {
-                out.push(v);
-              }
-            }
-            let n = out.len() as u64;
-            if let Some(m) = &throughput {
-              match m.apply(n).run(&mut ()).await {
-                Ok(()) => {}
-                Err(never) => match never {},
-              }
-            }
-            return Ok(Some(Chunk::from_vec(out)));
-          }
           StreamState::DirectQueue {
             queue,
             buffered,
@@ -538,7 +591,7 @@ where
       Box::pin(async move {
         let mut out = Vec::new();
         loop {
-          if interruption_requested(r) {
+          if stream.cancellation.is_cancelled() {
             break;
           }
           match stream.poll_next_chunk(r).await? {
@@ -561,7 +614,7 @@ where
     Effect::new_async(move |r: &mut R| {
       Box::pin(async move {
         loop {
-          if interruption_requested(r) {
+          if stream.cancellation.is_cancelled() {
             break;
           }
           let Some(chunk) = stream.poll_next_chunk(r).await? else {
@@ -597,7 +650,7 @@ where
       Box::pin(async move {
         let mut acc = init;
         loop {
-          if interruption_requested(r) {
+          if stream.cancellation.is_cancelled() {
             break;
           }
           let Some(chunk) = stream.poll_next_chunk(r).await? else {
@@ -624,7 +677,7 @@ where
       Box::pin(async move {
         let mut acc = init;
         loop {
-          if interruption_requested(r) {
+          if stream.cancellation.is_cancelled() {
             break;
           }
           let Some(chunk) = stream.poll_next_chunk(r).await? else {
@@ -824,6 +877,7 @@ where
               shared_fail: Arc::clone(&shared_fail),
             })),
             throughput: None,
+            cancellation: StreamCancellation::None,
           });
         }
 
@@ -973,7 +1027,7 @@ where
       Box::pin(async move {
         let mut acc: Option<A> = None;
         loop {
-          if interruption_requested(r) {
+          if stream.cancellation.is_cancelled() {
             break;
           }
           let Some(chunk) = stream.poll_next_chunk(r).await? else {
@@ -1018,13 +1072,6 @@ where
   }
 }
 
-fn interruption_requested<R: 'static>(env: &R) -> bool {
-  let any = env as &dyn Any;
-  any
-    .downcast_ref::<CancellationToken>()
-    .is_some_and(CancellationToken::is_cancelled)
-}
-
 impl Stream<i64, (), ()> {
   /// Half-open range `[start, end_exclusive)` as a one-shot buffered stream.
   #[inline]
@@ -1055,14 +1102,11 @@ where
     queue: queue.clone(),
     policy,
   };
-  let stream = Stream {
-    state: Arc::new(Mutex::new(StreamState::Channel {
-      queue,
-      buffered: VecDeque::new(),
-      closed: false,
-    })),
-    throughput: None,
-  };
+  let stream = Stream::from_pull(ChannelQueuePull {
+    queue,
+    buffered: VecDeque::new(),
+    terminal: PullTerminal::Active,
+  });
   (stream, sender)
 }
 
@@ -1159,20 +1203,7 @@ where
   pub fn from_duplex_queue_channel(
     ch: crate::coordination::channel::QueueChannel<A, A, R>,
   ) -> Self {
-    let ch = ch.clone();
-    Stream::new(move |env: &mut R| {
-      crate::box_future(async move {
-        let mut out = Vec::new();
-        loop {
-          match ch.read().run(env).await {
-            Ok(None) => break,
-            Ok(Some(x)) => out.push(x),
-            Err(e) => return Err(e),
-          }
-        }
-        Ok(out)
-      })
-    })
+    Stream::from_pull(QueueChannelPull { ch })
   }
 }
 
@@ -1361,11 +1392,62 @@ mod tests {
     }
 
     #[test]
+    fn stream_from_channel_uses_shared_pull_state() {
+      let (stream, _sender) = stream_from_channel::<i32, &'static str, ()>(3);
+      let guard = stream.state.lock().expect("stream state mutex poisoned");
+      assert!(matches!(&*guard, StreamState::Pull(_)));
+    }
+
+    #[test]
+    fn stream_from_channel_terminal_success_returns_none_after_buffered_chunks() {
+      let (mut stream, sender) = stream_from_channel::<i32, &'static str, ()>(3);
+      assert_eq!(
+        block_on(send_chunk(&sender, Chunk::from_vec(vec![1, 2])).run(&mut ())),
+        Ok(())
+      );
+      assert_eq!(block_on(end_stream(sender).run(&mut ())), Ok(()));
+
+      let mut env = ();
+      assert_eq!(
+        block_on(stream.poll_next_chunk_with_size(&mut env, 1)),
+        Ok(Some(Chunk::from_vec(vec![1])))
+      );
+      assert_eq!(
+        block_on(stream.poll_next_chunk_with_size(&mut env, 1)),
+        Ok(Some(Chunk::from_vec(vec![2])))
+      );
+      assert_eq!(
+        block_on(stream.poll_next_chunk_with_size(&mut env, 1)),
+        Ok(None)
+      );
+    }
+
+    #[test]
     fn stream_from_channel_with_producer_failure_propagates_failure() {
       let (stream, sender) = stream_from_channel::<i32, &'static str, ()>(1);
       assert!(sender.fail("producer-failure"));
       let out = block_on(stream.run_collect().run(&mut ()));
       assert_eq!(out, Err("producer-failure"));
+    }
+
+    #[test]
+    fn stream_from_channel_terminal_failure_preserves_failure_after_buffered_chunks() {
+      let (mut stream, sender) = stream_from_channel::<i32, &'static str, ()>(3);
+      assert_eq!(
+        block_on(send_chunk(&sender, Chunk::from_vec(vec![1])).run(&mut ())),
+        Ok(())
+      );
+      assert!(sender.fail("producer-failure"));
+
+      let mut env = ();
+      assert_eq!(
+        block_on(stream.poll_next_chunk(&mut env)),
+        Ok(Some(Chunk::from_vec(vec![1])))
+      );
+      assert_eq!(
+        block_on(stream.poll_next_chunk(&mut env)),
+        Err("producer-failure")
+      );
     }
   }
 
@@ -1652,10 +1734,11 @@ mod tests {
 
     #[test]
     fn run_collect_with_pre_cancelled_token_returns_empty_output() {
-      let stream = Stream::<i32, (), CancellationToken>::from_effect(succeed(vec![1, 2, 3]));
-      let mut token = CancellationToken::new();
+      let token = CancellationToken::new();
       token.cancel();
-      let out = block_on(stream.run_collect().run(&mut token));
+      let stream =
+        Stream::from_effect(succeed::<Vec<i32>, (), ()>(vec![1, 2, 3])).with_cancellation(token);
+      let out = block_on(stream.run_collect().run(&mut ()));
       assert_eq!(out, Ok(Vec::<i32>::new()));
     }
 
@@ -1854,6 +1937,57 @@ mod tests {
       let b = block_on(ch_b.to_stream().run_collect().run(&mut ()));
       assert_eq!(a, Ok(vec![7]));
       assert_eq!(a, b);
+    }
+
+    #[test]
+    fn stream_from_duplex_queue_channel_uses_shared_pull_state() {
+      use crate::runtime::run_blocking;
+      let ch = run_blocking(QueueChannel::<i32, i32, ()>::duplex_unbounded(), ()).expect("channel");
+      let stream = Stream::from_duplex_queue_channel(ch);
+      let guard = stream.state.lock().expect("stream state mutex poisoned");
+      assert!(matches!(&*guard, StreamState::Pull(_)));
+    }
+
+    #[test]
+    fn stream_from_duplex_queue_channel_terminal_success_returns_none_after_items() {
+      use crate::runtime::run_blocking;
+      let ch = run_blocking(QueueChannel::<i32, i32, ()>::duplex_unbounded(), ()).expect("channel");
+      run_blocking(ch.write(1), ()).expect("write");
+      run_blocking(ch.write(2), ()).expect("write");
+      run_blocking(ch.shutdown(), ()).expect("shutdown");
+
+      let mut stream = Stream::from_duplex_queue_channel(ch);
+      let mut env = ();
+      assert_eq!(
+        block_on(stream.poll_next_chunk(&mut env)),
+        Ok(Some(Chunk::from_vec(vec![1])))
+      );
+      assert_eq!(
+        block_on(stream.poll_next_chunk(&mut env)),
+        Ok(Some(Chunk::from_vec(vec![2])))
+      );
+      assert_eq!(block_on(stream.poll_next_chunk(&mut env)), Ok(None));
+    }
+
+    #[test]
+    fn stream_from_duplex_queue_channel_with_cancellation_stops_between_pulls() {
+      use crate::runtime::{CancellationToken, run_blocking};
+      let ch = run_blocking(QueueChannel::<i32, i32, ()>::duplex_unbounded(), ()).expect("channel");
+      run_blocking(ch.write(1), ()).expect("write");
+      run_blocking(ch.write(2), ()).expect("write");
+      run_blocking(ch.shutdown(), ()).expect("shutdown");
+
+      let token = CancellationToken::new();
+      let cancel_after_first = token.clone();
+      let stream = Stream::from_duplex_queue_channel(ch)
+        .map(move |n| {
+          cancel_after_first.cancel();
+          n
+        })
+        .with_cancellation(token);
+
+      let out = block_on(stream.run_collect().run(&mut ()));
+      assert_eq!(out, Ok(vec![1]));
     }
   }
 
