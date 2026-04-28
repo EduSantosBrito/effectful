@@ -18,6 +18,8 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+use crate::ServiceContext;
+
 /// A layer with named dependency tracking.
 ///
 /// `TypedLayer` is a **recipe** for constructing a value, annotated with:
@@ -112,24 +114,25 @@ impl<O, E> TypedLayer<O, E> {
     (self.build_fn)()
   }
 
-  /// Build with dependency validation against a context.
+  /// Build with dependency validation against a [`ServiceContext`].
   ///
   /// Returns `Err` if any required service is missing from the context.
-  /// (Placeholder — full validation requires service name extraction from context)
   #[inline]
-  pub fn build_with_dependencies<R>(&self, _ctx: &R) -> Result<O, E>
+  pub fn build_with_dependencies(&self, ctx: &ServiceContext) -> Result<O, E>
   where
     E: From<LayerError>,
   {
-    // Runtime dependency check placeholder
-    // In full implementation, inspect context for required services
-    if !self.requires.is_empty() {
-      return Err(
-        LayerError::MissingDependencies {
-          missing: self.requires.iter().cloned().collect(),
-        }
-        .into(),
-      );
+    let available: HashSet<String> =
+      ctx.service_names().into_iter().map(|s| s.to_string()).collect();
+    let mut missing: Vec<String> = self
+      .requires
+      .iter()
+      .filter(|r| !available.contains(*r))
+      .cloned()
+      .collect();
+    if !missing.is_empty() {
+      missing.sort_unstable();
+      return Err(LayerError::MissingDependencies { missing }.into());
     }
     self.build()
   }
