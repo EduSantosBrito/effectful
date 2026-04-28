@@ -1,5 +1,6 @@
 //! Lightweight tracing hooks for effect/fiber observability.
 
+use super::traceparent::{SpanContext, SpanId, TraceFlags, TraceId};
 use crate::Effect;
 use crate::collections::EffectHashMap;
 use crate::collections::hash_map;
@@ -9,7 +10,6 @@ use crate::kernel::box_future;
 use crate::kernel::effect::{ProgramOp, SyncStep, start_async_operation, start_effect};
 use crate::runtime::{Never, run_blocking};
 use crate::scheduling::Clock;
-use super::traceparent::{SpanContext, SpanId, TraceFlags, TraceId};
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -1108,18 +1108,36 @@ where
   E: 'static,
   R: 'static,
 {
-  with_span_options_collected_with_providers(
+  with_span_options_collected_with_parent(effect, options, None, collector)
+}
+
+/// Runs `effect` inside a span recorded by an injected collector, using a parsed
+/// remote `SpanContext` as the parent when no local span is active.
+pub fn with_span_options_collected_with_parent<A, E, R>(
+  effect: Effect<A, E, R>,
+  options: SpanOptions,
+  parent: Option<SpanContext>,
+  collector: Arc<dyn TraceCollector>,
+) -> Effect<A, E, R>
+where
+  A: 'static,
+  E: 'static,
+  R: 'static,
+{
+  with_span_options_collected_with_providers_and_parent(
     effect,
     options,
+    parent,
     collector,
     Arc::new(SequentialTraceContextProvider::new()),
     Arc::new(Instant::now),
   )
 }
 
-fn with_span_options_collected_with_providers<A, E, R>(
+fn with_span_options_collected_with_providers_and_parent<A, E, R>(
   effect: Effect<A, E, R>,
   options: SpanOptions,
+  initial_parent_context: Option<SpanContext>,
   collector: Arc<dyn TraceCollector>,
   context_provider: Arc<dyn TraceContextProvider>,
   clock_now: Arc<dyn Fn() -> Instant + Send + Sync>,
@@ -1136,6 +1154,7 @@ where
     context_provider,
     clock_now,
     false,
+    initial_parent_context,
   )
 }
 
@@ -1276,6 +1295,7 @@ where
     tracing_context_provider(),
     tracing_clock_now(),
     true,
+    None,
   )
 }
 
@@ -1286,6 +1306,7 @@ fn with_span_options_enabled_with_collector<A, E, R>(
   context_provider: Arc<dyn TraceContextProvider>,
   clock_now: Arc<dyn Fn() -> Instant + Send + Sync>,
   bridge_to_tracing: bool,
+  initial_parent_context: Option<SpanContext>,
 ) -> Effect<A, E, R>
 where
   A: 'static,
@@ -1303,7 +1324,10 @@ where
       }
       let refs = ensure_tracing_fiber_refs().clone();
       let stack = run_blocking(refs.span_stack.get(), ()).expect("span_stack get");
-      let parent_context = stack.last().map(|span| span.context);
+      let parent_context = stack
+        .last()
+        .map(|span| span.context)
+        .or(initial_parent_context);
       let context = match parent_context {
         Some(parent) => context_provider.child_context(&parent),
         None => context_provider.root_context(),
@@ -1723,6 +1747,76 @@ mod tests {
         .expect("clock span");
       assert_eq!(span.started_at, start);
       assert_eq!(span.duration(), Some(Duration::from_millis(5)));
+    }
+
+    #[test]
+    fn with_span_options_collected_with_parent_uses_parsed_traceparent_without_installing_layer() {
+      let _guard = test_lock();
+      let parsed =
+        SpanContext::from_traceparent("00-01010101010101010101010101010101-0202020202020202-01")
+          .expect("valid traceparent");
+      let collector = RecordingTraceCollector::default();
+      let eff = with_span_options_collected_with_parent(
+        succeed::<u32, (), ()>(7),
+        SpanOptions::new("injected.parent.span"),
+        Some(parsed),
+        Arc::new(collector.clone()),
+      );
+
+      let out = run_blocking(eff, ());
+      assert_eq!(out, Ok(7));
+
+      let snapshot = collector.snapshot();
+      assert_eq!(snapshot.spans.len(), 1);
+      let span = &snapshot.spans[0];
+      assert_eq!(span.name, "injected.parent.span");
+      assert_eq!(span.context.trace_id, parsed.trace_id);
+      assert_eq!(span.parent_span_id, Some(parsed.span_id));
+      assert_ne!(span.context.span_id, parsed.span_id);
+      assert_eq!(span.context.trace_flags, parsed.trace_flags);
+      assert_eq!(span.status, SpanStatus::Ok);
+      assert!(snapshot_tracing().spans.is_empty());
+    }
+
+    #[test]
+    fn nested_spans_with_parsed_parent_use_fiber_stack_for_inner_parent() {
+      let _guard = test_lock();
+      let parsed =
+        SpanContext::from_traceparent("00-01010101010101010101010101010101-0202020202020202-01")
+          .expect("valid traceparent");
+      let collector = RecordingTraceCollector::default();
+      let inner = with_span_options_collected_with_parent(
+        succeed::<(), (), ()>(()),
+        SpanOptions::new("inner.collected"),
+        Some(parsed),
+        Arc::new(collector.clone()),
+      );
+      let outer = with_span_options_collected_with_parent(
+        inner,
+        SpanOptions::new("outer.collected"),
+        Some(parsed),
+        Arc::new(collector.clone()),
+      );
+
+      let out = run_blocking(outer, ());
+      assert_eq!(out, Ok(()));
+
+      let snapshot = collector.snapshot();
+      assert_eq!(snapshot.spans.len(), 2);
+      let outer_span = snapshot
+        .spans
+        .iter()
+        .find(|s| s.name == "outer.collected")
+        .expect("outer span");
+      let inner_span = snapshot
+        .spans
+        .iter()
+        .find(|s| s.name == "inner.collected")
+        .expect("inner span");
+      assert_eq!(outer_span.parent_span_id, Some(parsed.span_id));
+      assert_eq!(inner_span.parent_span_id, Some(outer_span.context.span_id));
+      assert_eq!(outer_span.context.trace_id, parsed.trace_id);
+      assert_eq!(inner_span.context.trace_id, parsed.trace_id);
     }
   }
 

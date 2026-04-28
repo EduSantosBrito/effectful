@@ -126,6 +126,7 @@ pub use observability::{
   install_tracing_layer_with_context_provider,
   install_tracing_layer_with_context_provider_and_clock, metric_make, snapshot_tracing,
   tracing_enabled, with_span, with_span_options, with_span_options_collected,
+  with_span_options_collected_with_parent,
 };
 pub use resource::{Cache, CacheStats, Finalizer, KeyedPool, Pool, Scope};
 pub use runtime::{

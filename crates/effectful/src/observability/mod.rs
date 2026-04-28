@@ -16,13 +16,13 @@ pub use traceparent::{SpanContext, SpanId, TraceFlags, TraceId, TraceParentParse
 pub use tracing::{
   __effectful_span_lazy, __effectful_span_lazy_scoped, AnnotateCurrentSpanErr,
   AnnotateCurrentSpanSuccess, EffectEvent, FiberEvent, GlobalTraceCollector, LogSpan,
-  SequentialTraceContextProvider, SpanAttributeValue, SpanEvent, SpanLevel,
-  SpanOptions, SpanRecord, SpanStatus, TraceCollector, TraceContextProvider,
-  TracingConfig, TracingFiberRefs, TracingSnapshot, annotate_current_span,
-  annotate_current_span_attribute, emit_current_span_event,
+  SequentialTraceContextProvider, SpanAttributeValue, SpanEvent, SpanLevel, SpanOptions,
+  SpanRecord, SpanStatus, TraceCollector, TraceContextProvider, TracingConfig, TracingFiberRefs,
+  TracingSnapshot, annotate_current_span, annotate_current_span_attribute, emit_current_span_event,
   emit_current_span_event_with_attributes, emit_effect_event, emit_fiber_event,
   install_tracing_layer, install_tracing_layer_with_clock,
   install_tracing_layer_with_context_provider,
   install_tracing_layer_with_context_provider_and_clock, snapshot_tracing, tracing_enabled,
   with_span, with_span_options, with_span_options_collected,
+  with_span_options_collected_with_parent,
 };
