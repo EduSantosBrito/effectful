@@ -127,6 +127,33 @@ const mapPlatformError = (message: string) => (cause: unknown) =>
   new SandcastleError({ message, cause });
 
 const shellEscape = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
+const openCodeLogDir = "/home/agent/.local/share/opencode/log";
+
+const withOpenCodeHeartbeat = (agentCommand: string) => {
+  const script = [
+    `${agentCommand} &`,
+    "agent_pid=$!",
+    "(",
+    "  last_activity=",
+    "  while kill -0 \"$agent_pid\" 2>/dev/null; do",
+    "    sleep 30",
+    `    current_activity=$(for f in ${openCodeLogDir}/*.log; do [ -f \"$f\" ] || continue; stat -c '%Y:%s:%n' \"$f\"; done | sort | tail -n 1)`,
+    "    if [ -n \"$current_activity\" ] && [ \"$current_activity\" != \"$last_activity\" ]; then",
+    "      printf '%s\\n' '[sandcastle-heartbeat] opencode log active'",
+    "      last_activity=$current_activity",
+    "    fi",
+    "  done",
+    ") &",
+    "heartbeat_pid=$!",
+    "wait \"$agent_pid\"",
+    "exit_code=$?",
+    "kill \"$heartbeat_pid\" 2>/dev/null || true",
+    "wait \"$heartbeat_pid\" 2>/dev/null || true",
+    "exit \"$exit_code\"",
+  ].join("\n");
+
+  return `sh -c ${shellEscape(script)}`;
+};
 
 // === AGENT PROVIDER ===
 const sandboxedOpenCode = (model: string, variant?: string): AgentProvider => ({
@@ -134,7 +161,9 @@ const sandboxedOpenCode = (model: string, variant?: string): AgentProvider => ({
   env: {},
   captureSessions: false,
   buildPrintCommand: ({ prompt }) => ({
-    command: `opencode run --dangerously-skip-permissions --model ${shellEscape(model)}${variant ? ` --variant ${shellEscape(variant)}` : ""} ${shellEscape(prompt)}`,
+    command: withOpenCodeHeartbeat(
+      `opencode run --dangerously-skip-permissions --model ${shellEscape(model)}${variant ? ` --variant ${shellEscape(variant)}` : ""} ${shellEscape(prompt)}`,
+    ),
   }),
   buildInteractiveArgs: ({ prompt }) => {
     const args = ["opencode", "--dangerously-skip-permissions", "--model", model];
