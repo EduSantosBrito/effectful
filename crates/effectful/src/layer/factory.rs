@@ -7,6 +7,7 @@
 use crate::context::{Cons, Nil};
 use crate::foundation::func::{compose, pipe1};
 use crate::kernel::Effect;
+use crate::layer::{LayerGraph, LayerNode};
 use crate::runtime::{Never, run_blocking};
 use std::rc::Rc;
 use std::sync::Mutex;
@@ -343,6 +344,14 @@ where
 /// Runs many layers of the same type and collects outputs in order (short-circuits on first error).
 pub struct MergeAllLayer<L> {
   layers: Vec<L>,
+  build_order: Vec<usize>,
+}
+
+impl<L> MergeAllLayer<L> {
+  #[cfg(test)]
+  fn planned_build_order(&self) -> &[usize] {
+    &self.build_order
+  }
 }
 
 impl<L> LayerBuild for MergeAllLayer<L>
@@ -356,8 +365,11 @@ where
     type Acc<O, E> = Result<Vec<O>, E>;
     type ChainStep<'a, O, E> = Rc<dyn Fn(Acc<O, E>) -> Acc<O, E> + 'a>;
     let mut chain: ChainStep<'_, L::Output, L::Error> = Rc::new(|r| r);
-    for layer in &self.layers {
+    for index in &self.build_order {
       let prev = Rc::clone(&chain);
+      let Some(layer) = self.layers.get(*index) else {
+        continue;
+      };
       chain = Rc::new(move |acc| {
         let prev = Rc::clone(&prev);
         compose(
@@ -381,9 +393,40 @@ pub fn merge_all<L>(layers: impl IntoIterator<Item = L>) -> MergeAllLayer<L>
 where
   L: LayerBuild,
 {
+  let layers = layers.into_iter().collect::<Vec<_>>();
+  let build_order = plan_merge_all_order(layers.len());
+
   MergeAllLayer {
-    layers: layers.into_iter().collect(),
+    layers,
+    build_order,
   }
+}
+
+fn plan_merge_all_order(layer_count: usize) -> Vec<usize> {
+  let nodes = (0..layer_count).map(|index| {
+    let id = format!("layer-{index:020}");
+    let service = format!("layer-{index:020}-output");
+    LayerNode::new(id, Vec::<String>::new(), [service])
+  });
+
+  let planned: Vec<usize> = match LayerGraph::new(nodes).plan_topological() {
+    Ok(plan) => plan
+      .build_order
+      .into_iter()
+      .filter_map(|id| parse_merge_all_node_index(&id))
+      .collect(),
+    Err(_) => (0..layer_count).collect(),
+  };
+
+  if planned.len() == layer_count {
+    planned
+  } else {
+    (0..layer_count).collect()
+  }
+}
+
+fn parse_merge_all_node_index(id: &str) -> Option<usize> {
+  id.strip_prefix("layer-")?.parse().ok()
 }
 
 /// Runs a provider layer first (output discarded), then the main layer.
@@ -548,6 +591,18 @@ mod tests {
         LayerFn((|| Ok::<u8, Boom>(4)) as fn() -> Result<u8, Boom>),
       ]);
       assert_eq!(all.build(), Ok(vec![3, 4]));
+    }
+
+    #[test]
+    fn merge_all_planner_adapter_preserves_input_order_for_planned_builds() {
+      let all = super::merge_all(vec![
+        LayerFn((|| Ok::<u8, Boom>(3)) as fn() -> Result<u8, Boom>),
+        LayerFn((|| Ok::<u8, Boom>(4)) as fn() -> Result<u8, Boom>),
+        LayerFn((|| Ok::<u8, Boom>(5)) as fn() -> Result<u8, Boom>),
+      ]);
+
+      assert_eq!(all.planned_build_order(), &[0, 1, 2]);
+      assert_eq!(all.build(), Ok(vec![3, 4, 5]));
     }
 
     #[test]
