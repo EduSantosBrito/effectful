@@ -453,6 +453,36 @@ mod tests {
       assert_eq!(err.issues[1].message, "negative");
       assert_eq!(err.to_string(), "0: positive\n1: negative");
     }
+
+    #[test]
+    fn decode_unknown_all_does_not_collect_after_success() {
+      let s = union_chain(vec![
+        i64_unknown_wire::<()>(),
+        filter(i64_unknown_wire::<()>(), |_| false, "never"),
+      ]);
+
+      let result = s
+        .decode_unknown_all(&Unknown::I64(42))
+        .expect("first arm should accept any i64");
+      assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn decode_unknown_all_single_arm_preserves_diagnostic() {
+      let s = union_chain(vec![filter(
+        i64_unknown_wire::<()>(),
+        |_| false,
+        "never",
+      )]);
+
+      let err = s
+        .decode_unknown_all(&Unknown::I64(1))
+        .expect_err("single arm rejects");
+
+      assert_eq!(err.issues.len(), 1);
+      assert_eq!(err.issues[0].path, "0");
+      assert_eq!(err.issues[0].message, "never");
+    }
   }
 
   mod wire_equal_fn {
