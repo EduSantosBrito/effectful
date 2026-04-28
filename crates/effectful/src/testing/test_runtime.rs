@@ -274,7 +274,7 @@ where
 mod tests {
   use super::*;
   use crate::scheduling::duration::duration;
-  use crate::{ContextService, MissingService, Schedule, fail, retry, succeed};
+  use crate::{MissingService, Schedule, fail, retry, succeed};
   use rstest::rstest;
   use std::sync::Arc;
   use std::sync::atomic::{AtomicUsize, Ordering};

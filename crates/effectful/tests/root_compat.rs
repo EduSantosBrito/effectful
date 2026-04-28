@@ -4,7 +4,6 @@ use effectful::{
   Cons, Context, Effect, LayerBuild, Nil, Service, layer_service, layer_service_env, provide_service,
   service, service_env,
 };
-use effectful::context::Get;
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 

@@ -536,7 +536,7 @@ mod tests {
   use rstest::rstest;
 
   use super::*;
-  use ::effectful::{Cons, Context, Layer, LayerBuild, Nil, Service, run_blocking};
+  use ::effectful::{Cons, Context, LayerBuild, Nil, Service, run_blocking};
 
   // ========== Fixtures ==========
 
@@ -922,7 +922,7 @@ mod tests {
   mod wave5_full_logger {
     use std::sync::{Arc, Mutex};
 
-    use ::effectful::{Layer, LayerBuild, run_blocking};
+    use ::effectful::{LayerBuild, run_blocking};
 
     use crate::{
       CompositeLogBackend, EffectLogger, EffectLoggerError, JsonLogBackend, LogBackend, LogLevel,

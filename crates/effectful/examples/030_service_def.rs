@@ -1,5 +1,5 @@
 //! Ex 030 — `#[derive(Service)]` makes the service type its own key.
-use effectful::{ContextService, Service};
+use effectful::Service;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Service)]
 struct DbSvc {

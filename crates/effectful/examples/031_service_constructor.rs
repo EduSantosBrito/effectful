@@ -1,5 +1,5 @@
 //! Ex 031 — a service value wraps itself in `ServiceContext`.
-use effectful::{ContextService, Service};
+use effectful::Service;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Service)]
 struct Port {
