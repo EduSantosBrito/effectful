@@ -167,3 +167,69 @@ mod build_without_dependency_validation {
     assert_eq!(result, Ok(42));
   }
 }
+
+mod to_diagnostic {
+  use super::*;
+
+  #[test]
+  fn missing_dependencies_uses_stable_service_keys() {
+    let err = LayerError::MissingDependencies {
+      missing: vec!["Queue".to_string(), "Config".to_string()],
+    };
+
+    let diagnostic = err.to_diagnostic();
+
+    assert_eq!(diagnostic.code, "missing-provider");
+    assert!(diagnostic.message.contains("`Config`"));
+    assert!(diagnostic.message.contains("`Queue`"));
+    assert!(diagnostic.suggestion.contains("provider"));
+  }
+
+  #[test]
+  fn single_missing_dependency_uses_single_provider_diagnostic() {
+    let err = LayerError::MissingDependencies {
+      missing: vec!["Config".to_string()],
+    };
+
+    let diagnostic = err.to_diagnostic();
+
+    assert_eq!(diagnostic.code, "missing-provider");
+    assert!(diagnostic.message.contains("requires service `Config`"));
+  }
+}
+
+mod planner_consistency {
+  use super::*;
+  use effectful::{LayerGraph, LayerNode};
+
+  #[test]
+  fn typed_layer_and_direct_layer_graph_produce_matching_missing_service_order() {
+    let layer = TypedLayer::from_fn(|| Ok(42))
+      .requiring("Queue")
+      .requiring("Config");
+
+    let ctx = ServiceContext::empty();
+    let typed_result: Result<i32, LayerError> = layer.build_with_dependencies(&ctx);
+
+    let graph = LayerGraph::new([LayerNode::new(
+      "typed",
+      ["Queue", "Config"],
+      Vec::<&str>::new(),
+    )]);
+    let graph_err = graph.plan_topological().expect_err("should fail");
+
+    let typed_missing = match typed_result {
+      Err(LayerError::MissingDependencies { missing }) => missing,
+      Ok(_) => panic!("expected missing dependencies"),
+    };
+
+    let graph_missing = match graph_err {
+      effectful::LayerPlannerError::MissingProviders { missing } => {
+        missing.into_iter().map(|m| m.service).collect::<Vec<_>>()
+      }
+      other => panic!("expected MissingProviders, got {other:?}"),
+    };
+
+    assert_eq!(typed_missing, graph_missing);
+  }
+}

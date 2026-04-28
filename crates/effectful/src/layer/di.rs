@@ -11,9 +11,44 @@ use std::rc::Rc;
 
 use crate::context::{Service, ServiceContext};
 use crate::kernel::{BoxFuture, Effect, box_future};
+use crate::layer::graph::{LayerDiagnostic, LayerGraph, LayerNode};
 
 type LayerBuildFn<E> =
   dyn Fn(ServiceContext) -> BoxFuture<'static, Result<ServiceContext, E>> + 'static;
+
+/// Trait for types that declare layer requirements as stable service keys.
+///
+/// Implemented for `()` (no requirements), single [`Service`] types, and common
+/// tuples of services so that `Layer::effect` and `Layer::succeed` can produce
+/// canonical planner metadata automatically.
+pub trait LayerRequirements {
+  /// Returns the stable service keys this type requires from upstream layers.
+  fn layer_requirements() -> Vec<&'static str>;
+}
+
+impl LayerRequirements for () {
+  fn layer_requirements() -> Vec<&'static str> {
+    Vec::new()
+  }
+}
+
+impl<S: Service> LayerRequirements for S {
+  fn layer_requirements() -> Vec<&'static str> {
+    vec![S::NAME]
+  }
+}
+
+impl<A: Service, B: Service> LayerRequirements for (A, B) {
+  fn layer_requirements() -> Vec<&'static str> {
+    vec![A::NAME, B::NAME]
+  }
+}
+
+impl<A: Service, B: Service, C: Service> LayerRequirements for (A, B, C) {
+  fn layer_requirements() -> Vec<&'static str> {
+    vec![A::NAME, B::NAME, C::NAME]
+  }
+}
 
 /// A lazy service graph node.
 ///
@@ -29,6 +64,7 @@ where
 {
   name: &'static str,
   build: Rc<LayerBuildFn<E>>,
+  nodes: Vec<LayerNode>,
   _pd: PhantomData<fn(RIn) -> ROut>,
 }
 
@@ -42,6 +78,7 @@ where
     Self {
       name: self.name,
       build: Rc::clone(&self.build),
+      nodes: self.nodes.clone(),
       _pd: PhantomData,
     }
   }
@@ -73,6 +110,21 @@ where
     Self {
       name,
       build: Rc::new(build),
+      nodes: Vec::new(),
+      _pd: PhantomData,
+    }
+  }
+
+  /// Private constructor that carries planner metadata.
+  #[inline]
+  fn from_context_with_nodes<F>(name: &'static str, build: F, nodes: Vec<LayerNode>) -> Self
+  where
+    F: Fn(ServiceContext) -> BoxFuture<'static, Result<ServiceContext, E>> + 'static,
+  {
+    Self {
+      name,
+      build: Rc::new(build),
+      nodes,
       _pd: PhantomData,
     }
   }
@@ -111,11 +163,16 @@ where
     F: Fn(E) -> E2 + Clone + 'static,
   {
     let name = self.name;
-    Layer::from_context(name, move |context| {
-      let layer = self.clone();
-      let f = f.clone();
-      box_future(async move { layer.build_with(context).await.map_err(f) })
-    })
+    let nodes = self.nodes.clone();
+    Layer::from_context_with_nodes(
+      name,
+      move |context| {
+        let layer = self.clone();
+        let f = f.clone();
+        box_future(async move { layer.build_with(context).await.map_err(f) })
+      },
+      nodes,
+    )
   }
 
   /// Memoize this layer's first result for subsequent builds of the same value.
@@ -129,18 +186,23 @@ where
   {
     let cache: Rc<RefCell<Option<Result<ServiceContext, E>>>> = Rc::new(RefCell::new(None));
     let name = self.name;
-    Self::from_context(name, move |context| {
-      let layer = self.clone();
-      let cache = Rc::clone(&cache);
-      if let Some(cached) = cache.borrow().clone() {
-        return box_future(async move { cached });
-      }
-      box_future(async move {
-        let result = layer.build_with(context).await;
-        *cache.borrow_mut() = Some(result.clone());
-        result
-      })
-    })
+    let nodes = self.nodes.clone();
+    Self::from_context_with_nodes(
+      name,
+      move |context| {
+        let layer = self.clone();
+        let cache = Rc::clone(&cache);
+        if let Some(cached) = cache.borrow().clone() {
+          return box_future(async move { cached });
+        }
+        box_future(async move {
+          let result = layer.build_with(context).await;
+          *cache.borrow_mut() = Some(result.clone());
+          result
+        })
+      },
+      nodes,
+    )
   }
 
   /// Merge this layer with another layer that uses the same input context.
@@ -149,15 +211,21 @@ where
   where
     ROut2: 'static,
   {
-    Layer::from_context("Layer.merge", move |context| {
-      let left = self.clone();
-      let right = that.clone();
-      box_future(async move {
-        let left_context = left.build_with(context.clone()).await?;
-        let right_context = right.build_with(context).await?;
-        Ok(left_context.merge(right_context))
-      })
-    })
+    let mut nodes = self.nodes.clone();
+    nodes.extend(that.nodes.clone());
+    Layer::from_context_with_nodes(
+      "Layer.merge",
+      move |context| {
+        let left = self.clone();
+        let right = that.clone();
+        box_future(async move {
+          let left_context = left.build_with(context.clone()).await?;
+          let right_context = right.build_with(context).await?;
+          Ok(left_context.merge(right_context))
+        })
+      },
+      nodes,
+    )
   }
 
   /// Provide this layer's requirements with another layer.
@@ -169,15 +237,21 @@ where
   where
     RProvider: 'static,
   {
-    Layer::from_context("Layer.provide", move |context| {
-      let layer = self.clone();
-      let provider = provider.clone();
-      box_future(async move {
-        let provided = provider.build_with(context.clone()).await?;
-        let full_context = context.merge(provided);
-        layer.build_with(full_context).await
-      })
-    })
+    let mut nodes = self.nodes.clone();
+    nodes.extend(provider.nodes.clone());
+    Layer::from_context_with_nodes(
+      "Layer.provide",
+      move |context| {
+        let layer = self.clone();
+        let provider = provider.clone();
+        box_future(async move {
+          let provided = provider.build_with(context.clone()).await?;
+          let full_context = context.merge(provided);
+          layer.build_with(full_context).await
+        })
+      },
+      nodes,
+    )
   }
 
   /// Provide this layer's requirements and keep provider services in the output.
@@ -189,15 +263,41 @@ where
   where
     RProvider: 'static,
   {
-    Layer::from_context("Layer.provide_merge", move |context| {
-      let layer = self.clone();
-      let provider = provider.clone();
-      box_future(async move {
-        let provided = provider.build_with(context.clone()).await?;
-        let output = layer.build_with(context.merge(provided.clone())).await?;
-        Ok(provided.merge(output))
-      })
-    })
+    let mut nodes = self.nodes.clone();
+    nodes.extend(provider.nodes.clone());
+    Layer::from_context_with_nodes(
+      "Layer.provide_merge",
+      move |context| {
+        let layer = self.clone();
+        let provider = provider.clone();
+        box_future(async move {
+          let provided = provider.build_with(context.clone()).await?;
+          let output = layer.build_with(context.merge(provided.clone())).await?;
+          Ok(provided.merge(output))
+        })
+      },
+      nodes,
+    )
+  }
+
+  /// Returns planner diagnostics for this layer's dependency graph.
+  ///
+  /// Diagnostics are empty when the layer can be built without additional
+  /// providers; otherwise they contain a single [`LayerDiagnostic`] from the
+  /// canonical planner with stable service keys.
+  #[inline]
+  pub fn diagnostics(&self) -> Vec<LayerDiagnostic> {
+    self.diagnostics_with_context(&ServiceContext::empty())
+  }
+
+  /// Returns planner diagnostics, treating services in `context` as available.
+  #[inline]
+  pub fn diagnostics_with_context(&self, context: &ServiceContext) -> Vec<LayerDiagnostic> {
+    let mut nodes = self.nodes.clone();
+    for name in context.service_names() {
+      nodes.push(LayerNode::new(name, Vec::<&str>::new(), [name]));
+    }
+    LayerGraph::new(nodes).diagnostics()
   }
 
   pub(crate) fn build_with(
@@ -216,10 +316,15 @@ where
   /// Construct an infallible layer from a concrete service value.
   #[inline]
   pub fn succeed(service: S) -> Self {
-    Self::from_context(S::NAME, move |_context| {
-      let service = service.clone();
-      box_future(async move { Ok(ServiceContext::empty().add(service)) })
-    })
+    let nodes = vec![LayerNode::new(S::NAME, Vec::<&str>::new(), [S::NAME])];
+    Self::from_context_with_nodes(
+      S::NAME,
+      move |_context| {
+        let service = service.clone();
+        box_future(async move { Ok(ServiceContext::empty().add(service)) })
+      },
+      nodes,
+    )
   }
 }
 
@@ -227,7 +332,7 @@ impl<S, E, RIn> Layer<S, E, RIn>
 where
   S: Service,
   E: 'static,
-  RIn: 'static,
+  RIn: LayerRequirements + 'static,
 {
   /// Construct a layer from an effectful service constructor.
   ///
@@ -238,13 +343,18 @@ where
   where
     F: Fn() -> Effect<S, E, ServiceContext> + 'static,
   {
-    Self::from_context(name, move |mut context| {
-      let effect = make();
-      box_future(async move {
-        let service = effect.run(&mut context).await?;
-        Ok(ServiceContext::empty().add(service))
-      })
-    })
+    let nodes = vec![LayerNode::new(name, RIn::layer_requirements(), [S::NAME])];
+    Self::from_context_with_nodes(
+      name,
+      move |mut context| {
+        let effect = make();
+        box_future(async move {
+          let service = effect.run(&mut context).await?;
+          Ok(ServiceContext::empty().add(service))
+        })
+      },
+      nodes,
+    )
   }
 }
 
@@ -326,5 +436,114 @@ mod tests {
       result,
       Err(MissingService { name }) if name == Config::NAME
     ));
+  }
+
+  mod diagnostics {
+    use super::*;
+
+    #[test]
+    fn diagnostics_when_effect_layer_missing_provider_returns_stable_service_key() {
+      let database = Layer::<Database, MissingService, Config>::effect("Database", || {
+        Config::use_sync(|config| Database { url: config.url })
+      });
+
+      let diagnostics = database.diagnostics();
+
+      assert_eq!(diagnostics.len(), 1);
+      assert_eq!(diagnostics[0].code, "missing-provider");
+      assert!(diagnostics[0].message.contains(Config::NAME));
+    }
+
+    #[test]
+    fn diagnostics_when_provider_supplies_requirement_returns_empty() {
+      let config = Layer::<Config, MissingService>::succeed(Config {
+        url: "postgres://".to_string(),
+      });
+      let database = Layer::<Database, MissingService, Config>::effect("Database", || {
+        Config::use_sync(|config| Database { url: config.url })
+      });
+
+      let diagnostics = database.provide(config).diagnostics();
+
+      assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn diagnostics_with_context_when_context_supplies_requirement_returns_empty() {
+      let database = Layer::<Database, MissingService, Config>::effect("Database", || {
+        Config::use_sync(|config| Database { url: config.url })
+      });
+      let ctx = ServiceContext::empty().add(Config {
+        url: "postgres://".to_string(),
+      });
+
+      let diagnostics = database.diagnostics_with_context(&ctx);
+
+      assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn diagnostics_merge_preserves_existing_build_behavior() {
+      let config = Layer::<Config, MissingService>::succeed(Config {
+        url: "postgres://".to_string(),
+      });
+      let logger = Layer::<Logger, MissingService>::succeed(Logger {
+        level: "debug".to_string(),
+      });
+
+      let context = run_blocking(config.merge(logger).build(), ()).expect("layer should build");
+      assert!(context.contains::<Config>());
+      assert!(context.contains::<Logger>());
+    }
+
+    #[test]
+    fn diagnostics_provide_preserves_existing_build_behavior() {
+      let config = Layer::<Config, MissingService>::succeed(Config {
+        url: "postgres://".to_string(),
+      });
+      let database = Layer::<Database, MissingService, Config>::effect("Database", || {
+        Config::use_sync(|config| Database { url: config.url })
+      });
+      let program: Effect<String, MissingService, ServiceContext> =
+        Database::use_sync(|database| database.url);
+
+      let result = run_blocking(program.provide(database.provide(config)), ());
+      assert_eq!(result, Ok("postgres://".to_string()));
+    }
+
+    #[test]
+    fn diagnostics_provide_merge_preserves_existing_build_behavior() {
+      let config = Layer::<Config, MissingService>::succeed(Config {
+        url: "postgres://".to_string(),
+      });
+      let database = Layer::<Database, MissingService, Config>::effect("Database", || {
+        Config::use_sync(|config| Database { url: config.url })
+      });
+
+      let merged = database.provide_merge(config);
+      let diagnostics = merged.diagnostics();
+      assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn diagnostics_service_layer_preserves_existing_build_behavior() {
+      let config = Config {
+        url: "postgres://".to_string(),
+      };
+      let layer = config.layer();
+
+      let context = run_blocking(layer.build(), ()).expect("layer should build");
+      assert!(context.contains::<Config>());
+    }
+
+    #[test]
+    fn diagnostics_succeed_preserves_existing_build_behavior() {
+      let layer = Layer::<Config, MissingService>::succeed(Config {
+        url: "postgres://".to_string(),
+      });
+
+      let context = run_blocking(layer.build(), ()).expect("layer should build");
+      assert!(context.contains::<Config>());
+    }
   }
 }

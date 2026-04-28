@@ -34,7 +34,7 @@ pub mod graph;
 pub mod service;
 pub mod typed;
 
-pub use di::Layer;
+pub use di::{Layer, LayerRequirements};
 pub use factory::{
   LayerBuild, LayerEffect, LayerExt, LayerFn, LayerFnFrom, LayerFrom, Stack, StackThen, effect,
   fail, from_fn, merge_all, succeed,

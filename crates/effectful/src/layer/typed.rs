@@ -19,6 +19,9 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use crate::ServiceContext;
+use crate::layer::graph::{
+  LayerDiagnostic, LayerGraph, LayerMissingProvider, LayerNode, LayerPlannerError,
+};
 
 /// A layer with named dependency tracking.
 ///
@@ -117,26 +120,17 @@ impl<O, E> TypedLayer<O, E> {
   /// Build with dependency validation against a [`ServiceContext`].
   ///
   /// Returns `Err` if any required service is missing from the context.
+  /// Uses the canonical planner so diagnostics match [`LayerGraph`].
   #[inline]
   pub fn build_with_dependencies(&self, ctx: &ServiceContext) -> Result<O, E>
   where
     E: From<LayerError>,
   {
-    let available: HashSet<String> = ctx
-      .service_names()
-      .into_iter()
-      .map(|s| s.to_string())
-      .collect();
-    let mut missing: Vec<String> = self
-      .requires
-      .iter()
-      .filter(|r| !available.contains(*r))
-      .cloned()
-      .collect();
-    if !missing.is_empty() {
-      missing.sort_unstable();
-      return Err(LayerError::MissingDependencies { missing }.into());
-    }
+    validate_requirements_with_planner(
+      "TypedLayer",
+      &self.requires,
+      ctx.service_names().into_iter().map(|s| s.to_string()),
+    )?;
     self.build()
   }
 
@@ -190,6 +184,55 @@ impl std::fmt::Display for LayerError {
 }
 
 impl std::error::Error for LayerError {}
+
+impl LayerError {
+  /// Maps this error to a [`LayerDiagnostic`] using stable service keys.
+  pub fn to_diagnostic(&self) -> LayerDiagnostic {
+    match self {
+      LayerError::MissingDependencies { missing } => {
+        let planner_missing: Vec<LayerMissingProvider> = missing
+          .iter()
+          .map(|service| LayerMissingProvider::new("TypedLayer", service.clone()))
+          .collect();
+        LayerPlannerError::MissingProviders {
+          missing: planner_missing,
+        }
+        .to_diagnostic()
+      }
+    }
+  }
+}
+
+/// Validate requirements using the canonical planner for stable diagnostics.
+fn validate_requirements_with_planner(
+  layer_id: &str,
+  requires: &HashSet<String>,
+  available: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<(), LayerError> {
+  let mut nodes = Vec::new();
+  for name in available {
+    let name = name.into();
+    nodes.push(LayerNode::new(&name, Vec::<&str>::new(), [&name]));
+  }
+  nodes.push(LayerNode::new(
+    layer_id,
+    requires.iter().cloned().collect::<Vec<_>>(),
+    Vec::<&str>::new(),
+  ));
+
+  if let Err(LayerPlannerError::MissingProviders { missing }) =
+    LayerGraph::new(nodes).plan_topological()
+  {
+    let mut missing_names: Vec<String> = missing.into_iter().map(|m| m.service).collect();
+    missing_names.sort_unstable();
+    missing_names.dedup();
+    return Err(LayerError::MissingDependencies {
+      missing: missing_names,
+    });
+  }
+
+  Ok(())
+}
 
 /// A merged layer combining multiple sub-layers.
 pub struct MergedLayer<O, E> {
