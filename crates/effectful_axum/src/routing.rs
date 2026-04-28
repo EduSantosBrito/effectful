@@ -30,7 +30,7 @@ where
   tokio::task::block_in_place(|| {
     run_blocking(request_counter.apply(1), ()).expect("request counter");
   });
-  crate::run_effect_from_state(env, |e| latency.track_duration(f(e))).await
+  effectful_tokio::run_effect_from_state(env, |e| latency.track_duration(f(e))).await
 }
 
 /// `GET` — `f` is invoked per request; use [`Clone`] on `f` when the router stores it (e.g. closure
@@ -47,7 +47,7 @@ where
     let f = f.clone();
     async move {
       let State(env) = st;
-      match crate::run_effect_from_state(env, |e| f(e)).await {
+      match effectful_tokio::run_effect_from_state(env, |e| f(e)).await {
         Ok(a) => a.into_response(),
         Err(e) => e.into_response(),
       }
@@ -140,7 +140,7 @@ where
     let f = f.clone();
     async move {
       let State(env) = st;
-      match crate::run_effect_from_state(env, |e| f(e)).await {
+      match effectful_tokio::run_effect_from_state(env, |e| f(e)).await {
         Ok(a) => a.into_response(),
         Err(e) => e.into_response(),
       }
@@ -188,7 +188,7 @@ where
     let f = f.clone();
     async move {
       let State(env) = st;
-      match crate::run_effect_from_state(env, |e| f(e)).await {
+      match effectful_tokio::run_effect_from_state(env, |e| f(e)).await {
         Ok(a) => a.into_response(),
         Err(e) => e.into_response(),
       }
@@ -236,7 +236,7 @@ where
     let f = f.clone();
     async move {
       let State(env) = st;
-      match crate::run_effect_from_state(env, |e| f(e)).await {
+      match effectful_tokio::run_effect_from_state(env, |e| f(e)).await {
         Ok(a) => a.into_response(),
         Err(e) => e.into_response(),
       }
@@ -284,7 +284,7 @@ where
     let f = f.clone();
     async move {
       let State(env) = st;
-      match crate::run_effect_from_state(env, |e| f(e)).await {
+      match effectful_tokio::run_effect_from_state(env, |e| f(e)).await {
         Ok(a) => a.into_response(),
         Err(e) => e.into_response(),
       }

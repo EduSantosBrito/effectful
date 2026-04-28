@@ -64,7 +64,7 @@ pub async fn exchange_into_response<R: Send + 'static>(
     Err(_) => return StatusCode::BAD_REQUEST.into_response(),
   };
   let req_b = Request::from_parts(parts, bytes);
-  match crate::run_effect_from_state(env, move |_e| {
+  match effectful_tokio::run_effect_from_state(env, move |_e| {
     exchange::<Response<Bytes>, StatusCode, R>(ch, req_b)
   })
   .await

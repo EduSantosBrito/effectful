@@ -75,7 +75,7 @@ pub use channel_bridge::{exchange, exchange_into_response};
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use effectful::Effect;
-use effectful_tokio::run_async;
+pub use effectful_tokio::run_effect_from_state;
 
 /// Run `build(&mut env)` to obtain an effect, then drive it to completion with the **same** `env`.
 ///
@@ -93,24 +93,6 @@ where
   F: FnOnce(&mut S) -> Effect<A, E, S>,
 {
   run_effect_from_state(env, build).await
-}
-
-/// Drives `build(&mut env)` to completion on the current Tokio runtime without storing [`Effect`] in
-/// a [`Send`] async state machine (see [crate docs](crate#runtime-requirements)).
-#[inline]
-pub(crate) async fn run_effect_from_state<S, A, E, F>(mut env: S, build: F) -> Result<A, E>
-where
-  S: Send + 'static,
-  A: 'static,
-  E: 'static,
-  F: FnOnce(&mut S) -> Effect<A, E, S>,
-{
-  tokio::task::block_in_place(move || {
-    tokio::runtime::Handle::current().block_on(async move {
-      let eff = build(&mut env);
-      run_async(eff, env).await
-    })
-  })
 }
 
 /// Axum handler: extract [`State`]`<S>`, build an effect, map success and

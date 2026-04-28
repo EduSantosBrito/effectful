@@ -27,6 +27,27 @@ use effectful::{Effect, FiberHandle, FiberId, Never, Runtime, from_async};
 /// Commonly used at the async boundary together with [`TokioRuntime`].
 pub use effectful::{run_async, run_blocking, run_fork, yield_now};
 
+/// Run `build(&mut env)` to obtain an effect, then drive it to completion with the **same** `env`.
+///
+/// Uses [`tokio::task::block_in_place`] / [`tokio::runtime::Handle::block_on`]
+/// so the returned future is [`Send`] for Axum / Tower HTTP handlers. Requires a **multi-thread**
+/// Tokio runtime (the default for `#[tokio::main]`).
+#[inline]
+pub async fn run_effect_from_state<S, A, E, F>(mut env: S, build: F) -> Result<A, E>
+where
+  S: Send + 'static,
+  A: 'static,
+  E: 'static,
+  F: FnOnce(&mut S) -> Effect<A, E, S>,
+{
+  tokio::task::block_in_place(move || {
+    tokio::runtime::Handle::current().block_on(async move {
+      let eff = build(&mut env);
+      run_async(eff, env).await
+    })
+  })
+}
+
 /// Tokio-backed [`Runtime`] adapter (async `sleep` / `yield_now`).
 pub struct TokioRuntime {
   _owned: Option<Arc<tokio::runtime::Runtime>>,

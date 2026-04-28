@@ -17,6 +17,14 @@
 //! (typically a [`Metric::timer`](effectful::Metric::timer)) and increments an error counter when the
 //! handler effect fails.
 //!
+//! ## HTTP execution seam
+//!
+//! [`ChannelService`] uses the same [`tokio::task::block_in_place`] /
+//! [`tokio::runtime::Handle::block_on`] strategy as [`effectful_axum`] (via
+//! [`effectful_tokio::run_effect_from_state`]) so the Tower future is [`Send`] on a multi-thread
+//! Tokio runtime. [`EffectService`] remains the non-`Send` generic Tower bridge for environments
+//! that do not require `Send` futures.
+//!
 //! ## Examples
 //!
 //! See `examples/` (e.g. `cargo run -p effectful_tower --example 001_effect_service`) or
@@ -345,6 +353,27 @@ where
   }
 }
 
+fn channel_exchange<S, Req, Res>(
+  ch: effectful::channel::QueueChannel<Res, Req, S>,
+  req: Req,
+) -> Effect<Res, QueueError, S>
+where
+  S: 'static,
+  Req: Send + 'static,
+  Res: Send + Clone + 'static,
+{
+  Effect::new_async(move |r: &mut S| {
+    box_future(async move {
+      let _ = ch.write(req).run(r).await;
+      match ch.read().run(r).await {
+        Ok(Some(x)) => Ok(x),
+        Ok(None) => Err(QueueError::Disconnected),
+        Err(e) => Err(e),
+      }
+    })
+  })
+}
+
 impl<S, Req, Res> Service<Req> for ChannelService<S, Req, Res>
 where
   S: Clone + Send + 'static,
@@ -363,20 +392,7 @@ where
     let env = self.state.clone();
     let ch = self.channel.clone();
     Box::pin(async move {
-      run_effect_async(
-        Effect::new_async(move |r: &mut S| {
-          box_future(async move {
-            ch.write(req).run(r).await.unwrap();
-            match ch.read().run(r).await {
-              Ok(Some(x)) => Ok(x),
-              Ok(None) => Err(QueueError::Disconnected),
-              Err(e) => Err(e),
-            }
-          })
-        }),
-        env,
-      )
-      .await
+      effectful_tokio::run_effect_from_state(env, |_r| channel_exchange(ch, req)).await
     })
   }
 }
@@ -511,5 +527,14 @@ mod tests {
     let svc: EffectService<(), _, u32> =
       EffectService::new((), |_env: &mut (), x: u32| succeed::<u32, (), ()>(x));
     assert!(svc.in_flight_counter().is_none());
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn tower_channel_service_uses_shared_http_executor() {
+    let ch = run_effect_async(QueueChannel::<u32, u32, ()>::duplex_unbounded(), ())
+      .await
+      .expect("duplex channel");
+    let mut svc = ChannelService::new((), ch);
+    assert_eq!(svc.ready().await.unwrap().call(42).await, Ok(42));
   }
 }
