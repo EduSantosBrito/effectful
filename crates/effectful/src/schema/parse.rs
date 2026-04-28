@@ -73,7 +73,6 @@ type BoxEncode<A, I> = Arc<dyn Fn(A) -> I + Send + Sync>;
 type BoxDecodeUnknown<A> = Arc<dyn Fn(&Unknown) -> Result<A, ParseError> + Send + Sync>;
 type BoxDecodeUnknownAll<A> = Arc<dyn Fn(&Unknown) -> Result<A, ParseErrors> + Send + Sync>;
 
-#[allow(dead_code)]
 enum FieldKey {
   Object(&'static str),
   TupleIndex(usize),
@@ -84,7 +83,6 @@ struct FieldSpec<A, I, E> {
   schema: Schema<A, I, E>,
 }
 
-#[allow(dead_code)]
 enum UnknownFieldSource<'a> {
   Object(&'a BTreeMap<String, Unknown>),
   Tuple(&'a [Unknown]),
@@ -449,21 +447,42 @@ where
   let s1_d = s1.clone();
   let s1_e = s1.clone();
   let s1_u = s1.clone();
-  Schema::make(
+  let decode_unknown: BoxDecodeUnknown<(A0, A1)> = Arc::new(move |u| match u {
+    Unknown::Array(arr) if arr.len() == 2 => {
+      let a0 = s0_u.decode_unknown(&arr[0]).map_err(|e| e.prefix("0"))?;
+      let a1 = s1_u.decode_unknown(&arr[1]).map_err(|e| e.prefix("1"))?;
+      Ok((a0, a1))
+    }
+    _ => Err(ParseError::new("", "expected array of length 2")),
+  });
+  Schema::make_with_decode_unknown_all(
     move |(i0, i1)| {
       let a0 = s0_d.decode(i0).map_err(|e| e.prefix("0"))?;
       let a1 = s1_d.decode(i1).map_err(|e| e.prefix("1"))?;
       Ok((a0, a1))
     },
     move |(a0, a1)| (s0_e.encode(a0), s1_e.encode(a1)),
-    move |u| match u {
+    decode_unknown,
+    Arc::new(move |u| match u {
       Unknown::Array(arr) if arr.len() == 2 => {
-        let a0 = s0_u.decode_unknown(&arr[0]).map_err(|e| e.prefix("0"))?;
-        let a1 = s1_u.decode_unknown(&arr[1]).map_err(|e| e.prefix("1"))?;
-        Ok((a0, a1))
+        let r0 = decode_unknown_field_all(
+          UnknownFieldSource::Tuple(arr),
+          &FieldSpec {
+            key: FieldKey::TupleIndex(0),
+            schema: s0.clone(),
+          },
+        );
+        let r1 = decode_unknown_field_all(
+          UnknownFieldSource::Tuple(arr),
+          &FieldSpec {
+            key: FieldKey::TupleIndex(1),
+            schema: s1.clone(),
+          },
+        );
+        merge_two_field_results(r0, r1)
       }
-      _ => Err(ParseError::new("", "expected array of length 2")),
-    },
+      _ => Err(ParseErrors::one(ParseError::new("", "expected array of length 2"))),
+    }),
   )
 }
 
@@ -1337,6 +1356,104 @@ mod tests {
       let s = array(i64::<()>());
       let u = Unknown::Array(vec![Unknown::I64(10), Unknown::I64(20)]);
       assert_eq!(s.decode_unknown(&u).unwrap(), vec![10_i64, 20_i64]);
+    }
+  }
+
+  mod tuple_schema_two_fields {
+    use super::*;
+
+    #[test]
+    fn decode_unknown_all_when_both_elements_invalid_returns_all_paths() {
+      let s = tuple(i64::<()>(), string::<()>());
+      let u = Unknown::Array(vec![
+        Unknown::String("bad-int".into()),
+        Unknown::I64(2),
+      ]);
+
+      let err = s.decode_unknown_all(&u).expect_err("both elements should fail");
+
+      assert_eq!(err.issues.len(), 2);
+      assert_eq!(err.issues[0].path, "0");
+      assert!(err.issues[0].message.contains("expected i64"));
+      assert_eq!(err.issues[1].path, "1");
+      assert!(err.issues[1].message.contains("expected string"));
+    }
+
+    #[test]
+    fn decode_unknown_all_non_array_fails() {
+      let s = tuple(i64::<()>(), string::<()>());
+      let err = s
+        .decode_unknown_all(&Unknown::I64(1))
+        .expect_err("non-array should fail");
+      assert_eq!(err.issues.len(), 1);
+      assert_eq!(err.issues[0].path, "");
+      assert!(err.issues[0].message.contains("expected array of length 2"));
+    }
+
+    #[test]
+    fn decode_unknown_all_wrong_length_fails() {
+      let s = tuple(i64::<()>(), string::<()>());
+      let err = s
+        .decode_unknown_all(&Unknown::Array(vec![Unknown::I64(1)]))
+        .expect_err("wrong length should fail");
+      assert_eq!(err.issues.len(), 1);
+      assert_eq!(err.issues[0].path, "");
+      assert!(err.issues[0].message.contains("expected array of length 2"));
+    }
+
+    #[test]
+    fn decode_unknown_all_nested_prefix() {
+      let inner = struct_("name", string::<()>(), "age", i64::<()>());
+      let s = tuple(inner, bool_::<()>());
+
+      let mut obj = BTreeMap::new();
+      obj.insert("name".into(), Unknown::I64(1)); // wrong type
+      obj.insert("age".into(), Unknown::String("old".into())); // wrong type
+      let u = Unknown::Array(vec![Unknown::Object(obj), Unknown::String("bad".into())]);
+
+      let err = s.decode_unknown_all(&u).expect_err("all elements should fail");
+
+      assert_eq!(err.issues.len(), 3);
+      assert_eq!(err.issues[0].path, "0.name");
+      assert_eq!(err.issues[1].path, "0.age");
+      assert_eq!(err.issues[2].path, "1");
+    }
+
+    #[test]
+    fn decode_unknown_success_returns_tuple() {
+      let s = tuple(i64::<()>(), string::<()>());
+      let u = Unknown::Array(vec![Unknown::I64(5), Unknown::String("hi".into())]);
+      let got = s.decode_unknown(&u).expect("ok");
+      assert_eq!(got, (5_i64, "hi".to_string()));
+    }
+
+    #[test]
+    fn decode_unknown_all_success_returns_tuple() {
+      let s = tuple(i64::<()>(), string::<()>());
+      let u = Unknown::Array(vec![Unknown::I64(5), Unknown::String("hi".into())]);
+      let got = s.decode_unknown_all(&u).expect("ok");
+      assert_eq!(got, (5_i64, "hi".to_string()));
+    }
+
+    #[test]
+    fn decode_wire_success() {
+      let s = tuple(i64::<()>(), string::<()>());
+      assert_eq!(
+        s.decode((5_i64, "hi".to_string())).unwrap(),
+        (5_i64, "hi".to_string())
+      );
+    }
+
+    #[test]
+    fn encode_wire() {
+      let s = tuple(i64::<()>(), string::<()>());
+      assert_eq!(s.encode((3_i64, "x".to_string())), (3_i64, "x".to_string()));
+    }
+
+    #[test]
+    fn decode_unknown_non_array_of_2_fails() {
+      let s = tuple(i64::<()>(), bool_::<()>());
+      assert!(s.decode_unknown(&Unknown::I64(1)).is_err());
     }
   }
 
