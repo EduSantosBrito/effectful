@@ -225,6 +225,9 @@ fn try_expand_tail_as_into_bind_await(
     _ => return None,
   }
   let operand = collect_bind_star_operand(&mut iter);
+  if operand.is_empty() {
+    return Some(quote! { compile_error!("effect!: bind* requires an operand") });
+  }
   if iter.next().is_some() {
     return None;
   }
@@ -307,11 +310,17 @@ fn expand_bind_star(tokens: TokenStream, r: &syn::Ident, path: &TokenStream) -> 
         if matches!(iter.peek(), Some(TokenTree::Punct(p)) if p.as_char() == '*') {
           iter.next(); // consume '*'
           let operand = collect_bind_star_operand(&mut iter);
-          // Recurse so nested `bind*` inside the operand is also expanded.
-          let expanded_operand = expand_bind_star(operand, r, path);
-          let bound = fast_bind_await(expanded_operand, r, path, true);
-          let group = proc_macro2::Group::new(Delimiter::Parenthesis, bound);
-          out.push(TokenTree::Group(group));
+          if operand.is_empty() {
+            let err = quote! { compile_error!("effect!: bind* requires an operand") };
+            let group = proc_macro2::Group::new(Delimiter::Parenthesis, err);
+            out.push(TokenTree::Group(group));
+          } else {
+            // Recurse so nested `bind*` inside the operand is also expanded.
+            let expanded_operand = expand_bind_star(operand, r, path);
+            let bound = fast_bind_await(expanded_operand, r, path, true);
+            let group = proc_macro2::Group::new(Delimiter::Parenthesis, bound);
+            out.push(TokenTree::Group(group));
+          }
         } else {
           out.push(tt);
         }

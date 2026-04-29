@@ -1,0 +1,10 @@
+error: effect!: bind* requires an operand
+ --> tests/ui/effect_macro_invalid_bind_syntax.rs:4:18
+  |
+4 |     let _program = effect! {
+  |  __________________^
+5 | |     bind*
+6 | |   };
+  | |___^
+  |
+  = note: this error originates in the macro `effect` (in Nightly builds, run with -Z macro-backtrace for more info)
