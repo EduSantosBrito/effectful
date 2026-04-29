@@ -1967,7 +1967,7 @@ mod tests {
     }
 
     #[test]
-    fn decode_unknown_all_when_one_invalid_returns_one_path() {
+    fn decode_unknown_all_when_all_elements_valid_returns_tuple() {
       let s = tuple3(i64::<()>(), string::<()>(), bool_::<()>());
       let u = Unknown::Array(vec![
         Unknown::I64(1),
@@ -1980,6 +1980,19 @@ mod tests {
 
   mod tuple4_all {
     use super::*;
+
+    #[test]
+    fn decode_unknown_all_when_all_elements_valid_returns_tuple() {
+      let s = tuple4(i64::<()>(), string::<()>(), bool_::<()>(), f64::<()>());
+      let u = Unknown::Array(vec![
+        Unknown::I64(1),
+        Unknown::String("ok".into()),
+        Unknown::Bool(true),
+        Unknown::F64(3.14),
+      ]);
+      let got = s.decode_unknown_all(&u).expect("all valid");
+      assert_eq!(got, (1_i64, "ok".to_string(), true, 3.14_f64));
+    }
 
     #[test]
     fn decode_unknown_all_when_all_elements_invalid_returns_all_paths() {
@@ -2001,6 +2014,19 @@ mod tests {
 
   mod struct3_all {
     use super::*;
+
+    #[test]
+    fn decode_unknown_all_when_all_fields_valid_returns_tuple() {
+      let s = struct3("a", i64::<()>(), "b", string::<()>(), "c", bool_::<()>());
+      let mut m = BTreeMap::new();
+      m.insert("a".into(), Unknown::I64(1));
+      m.insert("b".into(), Unknown::String("ok".into()));
+      m.insert("c".into(), Unknown::Bool(true));
+      let got = s
+        .decode_unknown_all(&Unknown::Object(m))
+        .expect("all valid");
+      assert_eq!(got, (1_i64, "ok".to_string(), true));
+    }
 
     #[test]
     fn decode_unknown_all_when_all_fields_invalid_returns_all_paths() {
@@ -2034,6 +2060,25 @@ mod tests {
 
   mod struct4_all {
     use super::*;
+
+    #[test]
+    fn decode_unknown_all_when_all_fields_valid_returns_tuple() {
+      let s = struct4(
+        "a", i64::<()>(),
+        "b", string::<()>(),
+        "c", bool_::<()>(),
+        "d", f64::<()>(),
+      );
+      let mut m = BTreeMap::new();
+      m.insert("a".into(), Unknown::I64(1));
+      m.insert("b".into(), Unknown::String("ok".into()));
+      m.insert("c".into(), Unknown::Bool(true));
+      m.insert("d".into(), Unknown::F64(3.14));
+      let got = s
+        .decode_unknown_all(&Unknown::Object(m))
+        .expect("all valid");
+      assert_eq!(got, (1_i64, "ok".to_string(), true, 3.14_f64));
+    }
 
     #[test]
     fn decode_unknown_all_when_all_fields_invalid_returns_all_paths() {
