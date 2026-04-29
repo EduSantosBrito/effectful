@@ -33,6 +33,7 @@ where
     &'a mut self,
     env: &'a mut R,
     chunk_size: usize,
+    inherited: StreamCancellation,
   ) -> crate::kernel::BoxFuture<'a, Result<Option<Chunk<A>>, E>>;
 }
 
@@ -60,11 +61,12 @@ where
     &'a mut self,
     env: &'a mut R,
     chunk_size: usize,
+    inherited: StreamCancellation,
   ) -> crate::kernel::BoxFuture<'a, Result<Option<Chunk<B>>, E>> {
     Box::pin(async move {
       let chunk = self
         .upstream
-        .poll_next_chunk_with_size(env, chunk_size)
+        .poll_next_chunk_with_size_and_cancellation(env, chunk_size, inherited)
         .await?;
       Ok(chunk.map(|items| items.map(&mut self.f)))
     })
@@ -95,8 +97,12 @@ where
     &'a mut self,
     env: &'a mut R,
     _chunk_size: usize,
+    inherited: StreamCancellation,
   ) -> crate::kernel::BoxFuture<'a, Result<Option<Chunk<A>>, crate::ChannelReadError<E>>> {
     Box::pin(async move {
+      if inherited.is_cancelled() {
+        return Ok(None);
+      }
       match self.ch.read().run(env).await? {
         Some(item) => Ok(Some(Chunk::from_vec(vec![item]))),
         None => Ok(None),
@@ -125,12 +131,16 @@ where
     &'a mut self,
     env: &'a mut R,
     chunk_size: usize,
+    inherited: StreamCancellation,
   ) -> crate::kernel::BoxFuture<'a, Result<Option<Chunk<A>>, E>> {
     Box::pin(async move {
       loop {
+        if inherited.is_cancelled() {
+          return Ok(None);
+        }
         let chunk = self
           .upstream
-          .poll_next_chunk_with_size(env, chunk_size)
+          .poll_next_chunk_with_size_and_cancellation(env, chunk_size, inherited.clone())
           .await?;
         let Some(chunk) = chunk else {
           return Ok(None);
@@ -173,9 +183,13 @@ where
     &'a mut self,
     _env: &'a mut R,
     chunk_size: usize,
+    inherited: StreamCancellation,
   ) -> crate::kernel::BoxFuture<'a, Result<Option<Chunk<A>>, E>> {
     Box::pin(async move {
       loop {
+        if inherited.is_cancelled() {
+          return Ok(None);
+        }
         if !self.buffered.is_empty() {
           let count = self.buffered.len().min(chunk_size);
           let mut out = Vec::with_capacity(count);
@@ -219,8 +233,12 @@ where
     &'a mut self,
     env: &'a mut R,
     _chunk_size: usize,
+    inherited: StreamCancellation,
   ) -> crate::kernel::BoxFuture<'a, Result<Option<Chunk<A>>, QueueError>> {
     Box::pin(async move {
+      if inherited.is_cancelled() {
+        return Ok(None);
+      }
       match self.ch.read().run(env).await? {
         Some(item) => Ok(Some(Chunk::from_vec(vec![item]))),
         None => Ok(None),
@@ -385,6 +403,13 @@ impl StreamCancellation {
       StreamCancellation::Token(token) => token.is_cancelled(),
     }
   }
+
+  fn or(self, other: StreamCancellation) -> StreamCancellation {
+    match self {
+      StreamCancellation::Token(_) => self,
+      StreamCancellation::None => other,
+    }
+  }
 }
 
 /// Compatibility facade preserving the v1 public stream type name.
@@ -454,9 +479,18 @@ where
     env: &'a mut R,
     chunk_size: usize,
   ) -> crate::kernel::BoxFuture<'a, Result<Option<Chunk<A>>, E>> {
+    self.poll_next_chunk_with_size_and_cancellation(env, chunk_size, StreamCancellation::None)
+  }
+
+  fn poll_next_chunk_with_size_and_cancellation<'a>(
+    &mut self,
+    env: &'a mut R,
+    chunk_size: usize,
+    inherited: StreamCancellation,
+  ) -> crate::kernel::BoxFuture<'a, Result<Option<Chunk<A>>, E>> {
     let state = self.state.clone();
     let throughput = self.throughput.clone();
-    let cancellation = self.cancellation.clone();
+    let cancellation = self.cancellation.clone().or(inherited);
     // `guard` is dropped before every `.await` (see Channel recv + Pending arms); clippy's
     // CFG does not always prove that across the `match`.
     #[allow(clippy::await_holding_lock)]
@@ -533,7 +567,10 @@ where
             };
             drop(guard);
 
-            let out = match pull.poll_next_chunk_with_size(env, chunk_size).await {
+            let out = match pull
+              .poll_next_chunk_with_size(env, chunk_size, cancellation.clone())
+              .await
+            {
               Ok(out) => out,
               Err(e) => {
                 *state.lock().expect("stream state mutex poisoned") = StreamState::Pull(pull);
@@ -1884,6 +1921,48 @@ mod tests {
       let out = block_on(stream.run_collect().run(&mut ()));
       assert_eq!(out, Ok(vec![4]));
       assert_eq!(m.snapshot_count(), 1);
+    }
+
+    #[test]
+    fn filter_respects_cancellation_between_empty_chunk_loops() {
+      use crate::runtime::CancellationToken;
+
+      let token = CancellationToken::new();
+      let cancel_after_first = token.clone();
+
+      let (stream, sender) = stream_from_channel::<i32, (), ()>(2);
+      assert_eq!(
+        block_on(send_chunk(&sender, Chunk::from_vec(vec![1, 3])).run(&mut ())),
+        Ok(())
+      );
+      assert_eq!(
+        block_on(send_chunk(&sender, Chunk::from_vec(vec![2, 4])).run(&mut ())),
+        Ok(())
+      );
+
+      let m_upstream = Metric::counter("upstream_pulls_empty_loop", []);
+      let m_terminal = Metric::counter("terminal_throughput_empty_loop", []);
+      let stream = stream
+        .with_throughput_metric(m_upstream.clone())
+        .map(move |n| {
+          if n == 1 {
+            cancel_after_first.cancel();
+          }
+          n * 2
+        })
+        .filter(Box::new(|n: &i32| *n % 4 == 0))
+        .with_throughput_metric(m_terminal.clone())
+        .with_cancellation(token);
+
+      let out = block_on(stream.run_collect().run(&mut ()));
+      // First chunk maps to [2, 6], none match filter (2%4=2, 6%4=2).
+      // Cancellation was triggered during map of first item.
+      // Filter should check inherited cancellation before pulling second chunk.
+      assert_eq!(out, Ok(vec![]));
+      // Terminal metric: no filtered items were yielded.
+      assert_eq!(m_terminal.snapshot_count(), 0);
+      // Upstream metric: only first chunk was pulled (2 items), second chunk NOT pulled.
+      assert_eq!(m_upstream.snapshot_count(), 2);
     }
   }
 
