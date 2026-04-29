@@ -59,13 +59,19 @@ Use HList `Context` when you want maximum static structure. Use `ServiceContext`
 At the composition root you may have a statically-typed `Context` but need to hand it to code that expects `ServiceContext`. Use [`IntoServiceContext`]:
 
 ```rust,ignore
-use effectful::{ctx, IntoServiceContext, Service, ServiceContext};
+use effectful::{ctx, Effect, IntoServiceContext, MissingService, Service, ServiceContext,
+  run_blocking};
 
 #[derive(Clone, Hash, Service)]
 struct Config { port: u16 }
 
 let static_ctx = ctx!(Config => Config { port: 8080 });
 let runtime_ctx: ServiceContext = static_ctx.into_service_context();
+
+let program: Effect<u16, MissingService, ServiceContext> =
+  Config::use_sync(|config| config.port);
+
+assert_eq!(run_blocking(program, runtime_ctx), Ok(8080));
 ```
 
 Only self-keyed service cells (`Tagged<S, S>` where `S` implements [`Service`]) convert. Arbitrary tagged values cannot silently enter runtime service lookup. Duplicate service types in one list make the head cell win, matching compile-time lookup intuition.
@@ -74,6 +80,6 @@ Only self-keyed service cells (`Tagged<S, S>` where `S` implements [`Service`]) 
 
 | Situation | Use |
 |-----------|-----|
-| Exact statically-shaped tagged HList; compile-time guarantees | `Context` |
-| Derive-service application code / layers; dynamic runtime lookup | `ServiceContext` |
-| Bridging the two at the composition root | `.into_service_context()` |
+| Fixed compile-time HList; path-sensitive internals | `Context` |
+| Derive-service app / layer code; runtime wiring | `ServiceContext` |
+| Bridging the two at the composition root | `ctx!` → `.into_service_context()` |

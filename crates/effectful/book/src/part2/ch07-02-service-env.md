@@ -66,8 +66,10 @@ struct Config { port: u16 }
 let static_ctx = ctx!(Config => Config { port: 8080 });
 let env: ServiceContext = static_ctx.into_service_context();
 
-let program: Effect<bool, MissingService, ServiceContext> =
-    Config::use_sync(|config| config.port == 8080);
+let program: Effect<u16, MissingService, ServiceContext> =
+    Config::use_sync(|config| config.port);
 
-let ok = run_blocking(program, env)?;
+assert_eq!(run_blocking(program, env), Ok(8080));
 ```
+
+This is the recommended path: build with `ctx!`, convert with `.into_service_context()`, then look up services with `Service::use_sync` or `Effect::service`.

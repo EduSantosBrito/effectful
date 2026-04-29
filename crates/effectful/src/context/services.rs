@@ -250,13 +250,19 @@ impl std::error::Error for MissingService {}
 /// ## Example
 ///
 /// ```ignore
-/// use effectful::{ctx, Context, IntoServiceContext, ServiceContext};
+/// use effectful::{ctx, Effect, IntoServiceContext, MissingService, Service, ServiceContext,
+///   run_blocking};
 ///
 /// #[derive(Clone, Service)]
 /// struct Config { port: u16 }
 ///
-/// let ctx = ctx!(Config => Config { port: 8080 });
-/// let svc_ctx: ServiceContext = ctx.into_service_context();
+/// let static_ctx = ctx!(Config => Config { port: 8080 });
+/// let env: ServiceContext = static_ctx.into_service_context();
+///
+/// let program: Effect<u16, MissingService, ServiceContext> =
+///   Config::use_sync(|config| config.port);
+///
+/// assert_eq!(run_blocking(program, env), Ok(8080));
 /// ```
 pub trait IntoServiceContext {
   /// Consume `self` and produce a [`ServiceContext`].
