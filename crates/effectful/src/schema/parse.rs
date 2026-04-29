@@ -150,6 +150,56 @@ fn merge_two_field_results<A0, A1>(
   }
 }
 
+fn merge_three_field_results<A0, A1, A2>(
+  r0: Result<A0, ParseErrors>,
+  r1: Result<A1, ParseErrors>,
+  r2: Result<A2, ParseErrors>,
+) -> Result<(A0, A1, A2), ParseErrors> {
+  match (r0, r1, r2) {
+    (Ok(a0), Ok(a1), Ok(a2)) => Ok((a0, a1, a2)),
+    (r0, r1, r2) => {
+      let mut issues = Vec::new();
+      if let Err(err) = r0 {
+        issues.extend(err.issues);
+      }
+      if let Err(err) = r1 {
+        issues.extend(err.issues);
+      }
+      if let Err(err) = r2 {
+        issues.extend(err.issues);
+      }
+      Err(ParseErrors::new(issues))
+    }
+  }
+}
+
+fn merge_four_field_results<A0, A1, A2, A3>(
+  r0: Result<A0, ParseErrors>,
+  r1: Result<A1, ParseErrors>,
+  r2: Result<A2, ParseErrors>,
+  r3: Result<A3, ParseErrors>,
+) -> Result<(A0, A1, A2, A3), ParseErrors> {
+  match (r0, r1, r2, r3) {
+    (Ok(a0), Ok(a1), Ok(a2), Ok(a3)) => Ok((a0, a1, a2, a3)),
+    (r0, r1, r2, r3) => {
+      let mut issues = Vec::new();
+      if let Err(err) = r0 {
+        issues.extend(err.issues);
+      }
+      if let Err(err) = r1 {
+        issues.extend(err.issues);
+      }
+      if let Err(err) = r2 {
+        issues.extend(err.issues);
+      }
+      if let Err(err) = r3 {
+        issues.extend(err.issues);
+      }
+      Err(ParseErrors::new(issues))
+    }
+  }
+}
+
 /// Bidirectional schema: semantic `A`, wire/intermediate `I`, phantom `E` ([`EffectData`] tag).
 pub struct Schema<A, I, E = ()> {
   phantom: PhantomData<fn() -> E>,
@@ -311,13 +361,23 @@ where
   let decode_f = s.decode.clone();
   let encode_f = s.encode.clone();
   let du = s.decode_unknown.clone();
+  let dua = s.decode_unknown_all.clone();
   let decode = Arc::new(decode);
   let decode2 = decode.clone();
+  let decode3 = decode.clone();
   let encode = Arc::new(encode);
-  Schema::make(
+  let decode_unknown: BoxDecodeUnknown<B> = Arc::new(move |u| {
+    let a = du(u)?;
+    decode3(a)
+  });
+  Schema::make_with_decode_unknown_all(
     move |i| decode(decode_f(i)?),
     move |b| encode_f(encode(b)),
-    move |u| decode2(du(u)?),
+    decode_unknown,
+    Arc::new(move |u| match dua(u) {
+      Ok(a) => decode2(a).map_err(ParseErrors::one),
+      Err(e) => Err(e),
+    }),
   )
 }
 
@@ -336,10 +396,13 @@ where
   let decode_f = s.decode.clone();
   let encode_f = s.encode.clone();
   let du = s.decode_unknown.clone();
+  let dua = s.decode_unknown_all.clone();
   let msg: String = message.into();
   let msg2 = msg.clone();
+  let msg3 = msg.clone();
   let p2 = pred.clone();
-  Schema::make(
+  let p3 = pred.clone();
+  Schema::make_with_decode_unknown_all(
     move |i| {
       let a = decode_f(i)?;
       if pred(&a) {
@@ -349,14 +412,22 @@ where
       }
     },
     move |a| encode_f(a),
-    move |u| {
+    Arc::new(move |u| {
       let a = du(u)?;
-      if p2(&a) {
+      if p3(&a) {
         Ok(a)
       } else {
         Err(ParseError::new("", msg2.clone()))
       }
-    },
+    }),
+    Arc::new(move |u| {
+      let a = dua(u)?;
+      if p2(&a) {
+        Ok(a)
+      } else {
+        Err(ParseErrors::one(ParseError::new("", msg3.clone())))
+      }
+    }),
   )
 }
 
@@ -384,16 +455,21 @@ where
   let s_dec = s.clone();
   let s_enc = s.clone();
   let s_du = s.clone();
-  Schema::make(
+  let s_dua = s.clone();
+  Schema::make_with_decode_unknown_all(
     move |oi| match oi {
       None => Ok(None),
       Some(i) => Ok(Some(s_dec.decode(i)?)),
     },
     move |oa| oa.map(|a| s_enc.encode(a)),
-    move |u| match u {
+    Arc::new(move |u| match u {
       Unknown::Null => Ok(None),
       other => Ok(Some(s_du.decode_unknown(other)?)),
-    },
+    }),
+    Arc::new(move |u| match u {
+      Unknown::Null => Ok(None),
+      other => s_dua.decode_unknown_all(other).map(Some),
+    }),
   )
 }
 
@@ -407,7 +483,8 @@ where
   let s_dec = s.clone();
   let s_enc = s.clone();
   let s_du = s.clone();
-  Schema::make(
+  let s_dua = s.clone();
+  Schema::make_with_decode_unknown_all(
     move |items: Vec<I>| {
       let mut out = Vec::with_capacity(items.len());
       for (idx, item) in items.into_iter().enumerate() {
@@ -419,7 +496,7 @@ where
       Ok(out)
     },
     move |values: Vec<A>| values.into_iter().map(|a| s_enc.encode(a)).collect(),
-    move |u| match u {
+    Arc::new(move |u| match u {
       Unknown::Array(items) => {
         let mut out = Vec::with_capacity(items.len());
         for (idx, item) in items.iter().enumerate() {
@@ -431,7 +508,29 @@ where
         Ok(out)
       }
       _ => Err(ParseError::new("", "expected array")),
-    },
+    }),
+    Arc::new(move |u| match u {
+      Unknown::Array(items) => {
+        let mut out = Vec::with_capacity(items.len());
+        let mut issues = Vec::new();
+        for (idx, item) in items.iter().enumerate() {
+          match s_dua.decode_unknown_all(item) {
+            Ok(a) => out.push(a),
+            Err(e) => {
+              for issue in e.issues {
+                issues.push(issue.prefix_index(idx));
+              }
+            }
+          }
+        }
+        if issues.is_empty() {
+          Ok(out)
+        } else {
+          Err(ParseErrors::new(issues))
+        }
+      }
+      _ => Err(ParseErrors::one(ParseError::new("", "expected array"))),
+    }),
   )
 }
 
@@ -512,14 +611,23 @@ where
 {
   let s0_d = s0.clone();
   let s0_e = s0.clone();
-  let s0_u = s0.clone();
+  let s0_du = s0.clone();
   let s1_d = s1.clone();
   let s1_e = s1.clone();
-  let s1_u = s1.clone();
+  let s1_du = s1.clone();
   let s2_d = s2.clone();
   let s2_e = s2.clone();
-  let s2_u = s2.clone();
-  Schema::make(
+  let s2_du = s2.clone();
+  let decode_unknown: BoxDecodeUnknown<(A0, A1, A2)> = Arc::new(move |u| match u {
+    Unknown::Array(arr) if arr.len() == 3 => {
+      let a0 = s0_du.decode_unknown(&arr[0]).map_err(|e| e.prefix("0"))?;
+      let a1 = s1_du.decode_unknown(&arr[1]).map_err(|e| e.prefix("1"))?;
+      let a2 = s2_du.decode_unknown(&arr[2]).map_err(|e| e.prefix("2"))?;
+      Ok((a0, a1, a2))
+    }
+    _ => Err(ParseError::new("", "expected array of length 3")),
+  });
+  Schema::make_with_decode_unknown_all(
     move |(i0, i1, i2)| {
       let a0 = s0_d.decode(i0).map_err(|e| e.prefix("0"))?;
       let a1 = s1_d.decode(i1).map_err(|e| e.prefix("1"))?;
@@ -527,15 +635,37 @@ where
       Ok((a0, a1, a2))
     },
     move |(a0, a1, a2)| (s0_e.encode(a0), s1_e.encode(a1), s2_e.encode(a2)),
-    move |u| match u {
+    decode_unknown,
+    Arc::new(move |u| match u {
       Unknown::Array(arr) if arr.len() == 3 => {
-        let a0 = s0_u.decode_unknown(&arr[0]).map_err(|e| e.prefix("0"))?;
-        let a1 = s1_u.decode_unknown(&arr[1]).map_err(|e| e.prefix("1"))?;
-        let a2 = s2_u.decode_unknown(&arr[2]).map_err(|e| e.prefix("2"))?;
-        Ok((a0, a1, a2))
+        let r0 = decode_unknown_field_all(
+          UnknownFieldSource::Tuple(arr),
+          &FieldSpec {
+            key: FieldKey::TupleIndex(0),
+            schema: s0.clone(),
+          },
+        );
+        let r1 = decode_unknown_field_all(
+          UnknownFieldSource::Tuple(arr),
+          &FieldSpec {
+            key: FieldKey::TupleIndex(1),
+            schema: s1.clone(),
+          },
+        );
+        let r2 = decode_unknown_field_all(
+          UnknownFieldSource::Tuple(arr),
+          &FieldSpec {
+            key: FieldKey::TupleIndex(2),
+            schema: s2.clone(),
+          },
+        );
+        merge_three_field_results(r0, r1, r2)
       }
-      _ => Err(ParseError::new("", "expected array of length 3")),
-    },
+      _ => Err(ParseErrors::one(ParseError::new(
+        "",
+        "expected array of length 3",
+      ))),
+    }),
   )
 }
 
@@ -559,17 +689,27 @@ where
 {
   let s0_d = s0.clone();
   let s0_e = s0.clone();
-  let s0_u = s0.clone();
+  let s0_du = s0.clone();
   let s1_d = s1.clone();
   let s1_e = s1.clone();
-  let s1_u = s1.clone();
+  let s1_du = s1.clone();
   let s2_d = s2.clone();
   let s2_e = s2.clone();
-  let s2_u = s2.clone();
+  let s2_du = s2.clone();
   let s3_d = s3.clone();
   let s3_e = s3.clone();
-  let s3_u = s3.clone();
-  Schema::make(
+  let s3_du = s3.clone();
+  let decode_unknown: BoxDecodeUnknown<(A0, A1, A2, A3)> = Arc::new(move |u| match u {
+    Unknown::Array(arr) if arr.len() == 4 => {
+      let a0 = s0_du.decode_unknown(&arr[0]).map_err(|e| e.prefix("0"))?;
+      let a1 = s1_du.decode_unknown(&arr[1]).map_err(|e| e.prefix("1"))?;
+      let a2 = s2_du.decode_unknown(&arr[2]).map_err(|e| e.prefix("2"))?;
+      let a3 = s3_du.decode_unknown(&arr[3]).map_err(|e| e.prefix("3"))?;
+      Ok((a0, a1, a2, a3))
+    }
+    _ => Err(ParseError::new("", "expected array of length 4")),
+  });
+  Schema::make_with_decode_unknown_all(
     move |(i0, i1, i2, i3)| {
       let a0 = s0_d.decode(i0).map_err(|e| e.prefix("0"))?;
       let a1 = s1_d.decode(i1).map_err(|e| e.prefix("1"))?;
@@ -585,16 +725,44 @@ where
         s3_e.encode(a3),
       )
     },
-    move |u| match u {
+    decode_unknown,
+    Arc::new(move |u| match u {
       Unknown::Array(arr) if arr.len() == 4 => {
-        let a0 = s0_u.decode_unknown(&arr[0]).map_err(|e| e.prefix("0"))?;
-        let a1 = s1_u.decode_unknown(&arr[1]).map_err(|e| e.prefix("1"))?;
-        let a2 = s2_u.decode_unknown(&arr[2]).map_err(|e| e.prefix("2"))?;
-        let a3 = s3_u.decode_unknown(&arr[3]).map_err(|e| e.prefix("3"))?;
-        Ok((a0, a1, a2, a3))
+        let r0 = decode_unknown_field_all(
+          UnknownFieldSource::Tuple(arr),
+          &FieldSpec {
+            key: FieldKey::TupleIndex(0),
+            schema: s0.clone(),
+          },
+        );
+        let r1 = decode_unknown_field_all(
+          UnknownFieldSource::Tuple(arr),
+          &FieldSpec {
+            key: FieldKey::TupleIndex(1),
+            schema: s1.clone(),
+          },
+        );
+        let r2 = decode_unknown_field_all(
+          UnknownFieldSource::Tuple(arr),
+          &FieldSpec {
+            key: FieldKey::TupleIndex(2),
+            schema: s2.clone(),
+          },
+        );
+        let r3 = decode_unknown_field_all(
+          UnknownFieldSource::Tuple(arr),
+          &FieldSpec {
+            key: FieldKey::TupleIndex(3),
+            schema: s3.clone(),
+          },
+        );
+        merge_four_field_results(r0, r1, r2, r3)
       }
-      _ => Err(ParseError::new("", "expected array of length 4")),
-    },
+      _ => Err(ParseErrors::one(ParseError::new(
+        "",
+        "expected array of length 4",
+      ))),
+    }),
   )
 }
 
@@ -685,14 +853,33 @@ where
 {
   let s0_d = s0.clone();
   let s0_e = s0.clone();
-  let s0_u = s0.clone();
+  let s0_du = s0.clone();
   let s1_d = s1.clone();
   let s1_e = s1.clone();
-  let s1_u = s1.clone();
+  let s1_du = s1.clone();
   let s2_d = s2.clone();
   let s2_e = s2.clone();
-  let s2_u = s2.clone();
-  Schema::make(
+  let s2_du = s2.clone();
+  let decode_unknown: BoxDecodeUnknown<(A0, A1, A2)> = Arc::new(move |u| {
+    let obj = match u {
+      Unknown::Object(m) => m,
+      _ => return Err(ParseError::new("", "expected object")),
+    };
+    let u0 = obj
+      .get(name0)
+      .ok_or_else(|| ParseError::new(name0, format!("missing field {name0}")))?;
+    let a0 = s0_du.decode_unknown(u0).map_err(|e| e.prefix(name0))?;
+    let u1 = obj
+      .get(name1)
+      .ok_or_else(|| ParseError::new(name1, format!("missing field {name1}")))?;
+    let a1 = s1_du.decode_unknown(u1).map_err(|e| e.prefix(name1))?;
+    let u2 = obj
+      .get(name2)
+      .ok_or_else(|| ParseError::new(name2, format!("missing field {name2}")))?;
+    let a2 = s2_du.decode_unknown(u2).map_err(|e| e.prefix(name2))?;
+    Ok((a0, a1, a2))
+  });
+  Schema::make_with_decode_unknown_all(
     move |(i0, i1, i2)| {
       let a0 = s0_d.decode(i0).map_err(|e| e.prefix(name0))?;
       let a1 = s1_d.decode(i1).map_err(|e| e.prefix(name1))?;
@@ -700,25 +887,35 @@ where
       Ok((a0, a1, a2))
     },
     move |(a0, a1, a2)| (s0_e.encode(a0), s1_e.encode(a1), s2_e.encode(a2)),
-    move |u| {
+    decode_unknown,
+    Arc::new(move |u| {
       let obj = match u {
         Unknown::Object(m) => m,
-        _ => return Err(ParseError::new("", "expected object")),
+        _ => return Err(ParseErrors::one(ParseError::new("", "expected object"))),
       };
-      let u0 = obj
-        .get(name0)
-        .ok_or_else(|| ParseError::new(name0, format!("missing field {name0}")))?;
-      let a0 = s0_u.decode_unknown(u0).map_err(|e| e.prefix(name0))?;
-      let u1 = obj
-        .get(name1)
-        .ok_or_else(|| ParseError::new(name1, format!("missing field {name1}")))?;
-      let a1 = s1_u.decode_unknown(u1).map_err(|e| e.prefix(name1))?;
-      let u2 = obj
-        .get(name2)
-        .ok_or_else(|| ParseError::new(name2, format!("missing field {name2}")))?;
-      let a2 = s2_u.decode_unknown(u2).map_err(|e| e.prefix(name2))?;
-      Ok((a0, a1, a2))
-    },
+      let r0 = decode_unknown_field_all(
+        UnknownFieldSource::Object(obj),
+        &FieldSpec {
+          key: FieldKey::Object(name0),
+          schema: s0.clone(),
+        },
+      );
+      let r1 = decode_unknown_field_all(
+        UnknownFieldSource::Object(obj),
+        &FieldSpec {
+          key: FieldKey::Object(name1),
+          schema: s1.clone(),
+        },
+      );
+      let r2 = decode_unknown_field_all(
+        UnknownFieldSource::Object(obj),
+        &FieldSpec {
+          key: FieldKey::Object(name2),
+          schema: s2.clone(),
+        },
+      );
+      merge_three_field_results(r0, r1, r2)
+    }),
   )
 }
 
@@ -747,17 +944,40 @@ where
 {
   let s0_d = s0.clone();
   let s0_e = s0.clone();
-  let s0_u = s0.clone();
+  let s0_du = s0.clone();
   let s1_d = s1.clone();
   let s1_e = s1.clone();
-  let s1_u = s1.clone();
+  let s1_du = s1.clone();
   let s2_d = s2.clone();
   let s2_e = s2.clone();
-  let s2_u = s2.clone();
+  let s2_du = s2.clone();
   let s3_d = s3.clone();
   let s3_e = s3.clone();
-  let s3_u = s3.clone();
-  Schema::make(
+  let s3_du = s3.clone();
+  let decode_unknown: BoxDecodeUnknown<(A0, A1, A2, A3)> = Arc::new(move |u| {
+    let obj = match u {
+      Unknown::Object(m) => m,
+      _ => return Err(ParseError::new("", "expected object")),
+    };
+    let u0 = obj
+      .get(name0)
+      .ok_or_else(|| ParseError::new(name0, format!("missing field {name0}")))?;
+    let a0 = s0_du.decode_unknown(u0).map_err(|e| e.prefix(name0))?;
+    let u1 = obj
+      .get(name1)
+      .ok_or_else(|| ParseError::new(name1, format!("missing field {name1}")))?;
+    let a1 = s1_du.decode_unknown(u1).map_err(|e| e.prefix(name1))?;
+    let u2 = obj
+      .get(name2)
+      .ok_or_else(|| ParseError::new(name2, format!("missing field {name2}")))?;
+    let a2 = s2_du.decode_unknown(u2).map_err(|e| e.prefix(name2))?;
+    let u3 = obj
+      .get(name3)
+      .ok_or_else(|| ParseError::new(name3, format!("missing field {name3}")))?;
+    let a3 = s3_du.decode_unknown(u3).map_err(|e| e.prefix(name3))?;
+    Ok((a0, a1, a2, a3))
+  });
+  Schema::make_with_decode_unknown_all(
     move |(i0, i1, i2, i3)| {
       let a0 = s0_d.decode(i0).map_err(|e| e.prefix(name0))?;
       let a1 = s1_d.decode(i1).map_err(|e| e.prefix(name1))?;
@@ -773,29 +993,42 @@ where
         s3_e.encode(a3),
       )
     },
-    move |u| {
+    decode_unknown,
+    Arc::new(move |u| {
       let obj = match u {
         Unknown::Object(m) => m,
-        _ => return Err(ParseError::new("", "expected object")),
+        _ => return Err(ParseErrors::one(ParseError::new("", "expected object"))),
       };
-      let u0 = obj
-        .get(name0)
-        .ok_or_else(|| ParseError::new(name0, format!("missing field {name0}")))?;
-      let a0 = s0_u.decode_unknown(u0).map_err(|e| e.prefix(name0))?;
-      let u1 = obj
-        .get(name1)
-        .ok_or_else(|| ParseError::new(name1, format!("missing field {name1}")))?;
-      let a1 = s1_u.decode_unknown(u1).map_err(|e| e.prefix(name1))?;
-      let u2 = obj
-        .get(name2)
-        .ok_or_else(|| ParseError::new(name2, format!("missing field {name2}")))?;
-      let a2 = s2_u.decode_unknown(u2).map_err(|e| e.prefix(name2))?;
-      let u3 = obj
-        .get(name3)
-        .ok_or_else(|| ParseError::new(name3, format!("missing field {name3}")))?;
-      let a3 = s3_u.decode_unknown(u3).map_err(|e| e.prefix(name3))?;
-      Ok((a0, a1, a2, a3))
-    },
+      let r0 = decode_unknown_field_all(
+        UnknownFieldSource::Object(obj),
+        &FieldSpec {
+          key: FieldKey::Object(name0),
+          schema: s0.clone(),
+        },
+      );
+      let r1 = decode_unknown_field_all(
+        UnknownFieldSource::Object(obj),
+        &FieldSpec {
+          key: FieldKey::Object(name1),
+          schema: s1.clone(),
+        },
+      );
+      let r2 = decode_unknown_field_all(
+        UnknownFieldSource::Object(obj),
+        &FieldSpec {
+          key: FieldKey::Object(name2),
+          schema: s2.clone(),
+        },
+      );
+      let r3 = decode_unknown_field_all(
+        UnknownFieldSource::Object(obj),
+        &FieldSpec {
+          key: FieldKey::Object(name3),
+          schema: s3.clone(),
+        },
+      );
+      merge_four_field_results(r0, r1, r2, r3)
+    }),
   )
 }
 
@@ -1712,6 +1945,336 @@ mod tests {
       m.insert("k".to_string(), Unknown::String("v".to_string()));
       let obj = Unknown::Object(m);
       let _ = format!("{:?}", obj);
+    }
+  }
+
+  mod tuple3_all {
+    use super::*;
+
+    #[test]
+    fn decode_unknown_all_when_all_elements_invalid_returns_all_paths() {
+      let s = tuple3(i64::<()>(), string::<()>(), bool_::<()>());
+      let u = Unknown::Array(vec![
+        Unknown::String("bad".into()),
+        Unknown::I64(1),
+        Unknown::I64(2),
+      ]);
+      let err = s.decode_unknown_all(&u).expect_err("all should fail");
+      assert_eq!(err.issues.len(), 3);
+      assert_eq!(err.issues[0].path, "0");
+      assert_eq!(err.issues[1].path, "1");
+      assert_eq!(err.issues[2].path, "2");
+    }
+
+    #[test]
+    fn decode_unknown_all_when_one_invalid_returns_one_path() {
+      let s = tuple3(i64::<()>(), string::<()>(), bool_::<()>());
+      let u = Unknown::Array(vec![
+        Unknown::I64(1),
+        Unknown::String("ok".into()),
+        Unknown::Bool(true),
+      ]);
+      assert_eq!(s.decode_unknown_all(&u).unwrap(), (1_i64, "ok".to_string(), true));
+    }
+  }
+
+  mod tuple4_all {
+    use super::*;
+
+    #[test]
+    fn decode_unknown_all_when_all_elements_invalid_returns_all_paths() {
+      let s = tuple4(i64::<()>(), string::<()>(), bool_::<()>(), f64::<()>());
+      let u = Unknown::Array(vec![
+        Unknown::String("bad".into()),
+        Unknown::I64(1),
+        Unknown::I64(2),
+        Unknown::String("bad".into()),
+      ]);
+      let err = s.decode_unknown_all(&u).expect_err("all should fail");
+      assert_eq!(err.issues.len(), 4);
+      assert_eq!(err.issues[0].path, "0");
+      assert_eq!(err.issues[1].path, "1");
+      assert_eq!(err.issues[2].path, "2");
+      assert_eq!(err.issues[3].path, "3");
+    }
+  }
+
+  mod struct3_all {
+    use super::*;
+
+    #[test]
+    fn decode_unknown_all_when_all_fields_invalid_returns_all_paths() {
+      let s = struct3("a", i64::<()>(), "b", string::<()>(), "c", bool_::<()>());
+      let mut m = BTreeMap::new();
+      m.insert("a".into(), Unknown::String("bad".into()));
+      m.insert("b".into(), Unknown::I64(1));
+      m.insert("c".into(), Unknown::I64(2));
+      let err = s
+        .decode_unknown_all(&Unknown::Object(m))
+        .expect_err("all should fail");
+      assert_eq!(err.issues.len(), 3);
+      assert_eq!(err.issues[0].path, "a");
+      assert_eq!(err.issues[1].path, "b");
+      assert_eq!(err.issues[2].path, "c");
+    }
+
+    #[test]
+    fn decode_unknown_all_when_all_fields_missing_returns_all_paths() {
+      let s = struct3("a", i64::<()>(), "b", string::<()>(), "c", bool_::<()>());
+      let m = BTreeMap::new();
+      let err = s
+        .decode_unknown_all(&Unknown::Object(m))
+        .expect_err("all should be missing");
+      assert_eq!(err.issues.len(), 3);
+      assert_eq!(err.issues[0].path, "a");
+      assert_eq!(err.issues[1].path, "b");
+      assert_eq!(err.issues[2].path, "c");
+    }
+  }
+
+  mod struct4_all {
+    use super::*;
+
+    #[test]
+    fn decode_unknown_all_when_all_fields_invalid_returns_all_paths() {
+      let s = struct4(
+        "a", i64::<()>(),
+        "b", string::<()>(),
+        "c", bool_::<()>(),
+        "d", f64::<()>(),
+      );
+      let mut m = BTreeMap::new();
+      m.insert("a".into(), Unknown::String("bad".into()));
+      m.insert("b".into(), Unknown::I64(1));
+      m.insert("c".into(), Unknown::I64(2));
+      m.insert("d".into(), Unknown::String("bad".into()));
+      let err = s
+        .decode_unknown_all(&Unknown::Object(m))
+        .expect_err("all should fail");
+      assert_eq!(err.issues.len(), 4);
+      assert_eq!(err.issues[0].path, "a");
+      assert_eq!(err.issues[1].path, "b");
+      assert_eq!(err.issues[2].path, "c");
+      assert_eq!(err.issues[3].path, "d");
+    }
+  }
+
+  mod nested_all {
+    use super::*;
+
+    #[test]
+    fn object_inside_tuple_returns_nested_paths_plus_sibling() {
+      let inner = struct_("name", string::<()>(), "age", i64::<()>());
+      let s = tuple(inner, bool_::<()>());
+
+      let mut obj = BTreeMap::new();
+      obj.insert("name".into(), Unknown::I64(1));
+      obj.insert("age".into(), Unknown::String("old".into()));
+      let u = Unknown::Array(vec![Unknown::Object(obj), Unknown::String("bad".into())]);
+
+      let err = s.decode_unknown_all(&u).expect_err("all should fail");
+      assert_eq!(err.issues.len(), 3);
+      assert_eq!(err.issues[0].path, "0.name");
+      assert_eq!(err.issues[1].path, "0.age");
+      assert_eq!(err.issues[2].path, "1");
+    }
+
+    #[test]
+    fn tuple_inside_object_returns_nested_paths_plus_sibling() {
+      let inner = tuple(i64::<()>(), string::<()>());
+      let s = struct_("payload", inner, "active", bool_::<()>());
+
+      let arr = Unknown::Array(vec![Unknown::String("bad".into()), Unknown::I64(2)]);
+      let mut obj = BTreeMap::new();
+      obj.insert("payload".into(), arr);
+      obj.insert("active".into(), Unknown::String("bad".into()));
+      let u = Unknown::Object(obj);
+
+      let err = s.decode_unknown_all(&u).expect_err("all should fail");
+      assert_eq!(err.issues.len(), 3);
+      assert_eq!(err.issues[0].path, "payload.0");
+      assert_eq!(err.issues[1].path, "payload.1");
+      assert_eq!(err.issues[2].path, "active");
+    }
+  }
+
+  mod transform_all {
+    use super::*;
+
+    #[test]
+    fn transform_preserves_accumulated_field_errors() {
+      let inner = struct3("a", i64::<()>(), "b", string::<()>(), "c", bool_::<()>());
+      let s = transform(
+        inner,
+        |(a, b, c)| Ok(format!("{a}-{b}-{c}")),
+        |s: String| {
+          let parts: Vec<&str> = s.split('-').collect();
+          (parts[0].parse().unwrap(), parts[1].to_string(), parts[2].parse().unwrap())
+        },
+      );
+
+      let mut m = BTreeMap::new();
+      m.insert("a".into(), Unknown::String("bad".into()));
+      m.insert("b".into(), Unknown::I64(1));
+      m.insert("c".into(), Unknown::I64(2));
+
+      let err = s
+        .decode_unknown_all(&Unknown::Object(m))
+        .expect_err("all should fail");
+      assert_eq!(err.issues.len(), 3);
+      assert_eq!(err.issues[0].path, "a");
+      assert_eq!(err.issues[1].path, "b");
+      assert_eq!(err.issues[2].path, "c");
+    }
+
+    #[test]
+    fn transform_decode_unknown_still_returns_single_error() {
+      let inner = struct3("a", i64::<()>(), "b", string::<()>(), "c", bool_::<()>());
+      let s = transform(
+        inner,
+        |(a, b, c)| Ok(format!("{a}-{b}-{c}")),
+        |s: String| {
+          let parts: Vec<&str> = s.split('-').collect();
+          (parts[0].parse().unwrap(), parts[1].to_string(), parts[2].parse().unwrap())
+        },
+      );
+
+      let mut m = BTreeMap::new();
+      m.insert("a".into(), Unknown::String("bad".into()));
+      m.insert("b".into(), Unknown::String("ok".into()));
+      m.insert("c".into(), Unknown::Bool(true));
+
+      let err = s.decode_unknown(&Unknown::Object(m)).expect_err("a should fail");
+      assert_eq!(err.path, "a");
+    }
+  }
+
+  mod union_field_all {
+    use super::*;
+
+    #[test]
+    fn union_failure_inside_field_preserves_arm_diagnostics() {
+      let primary = filter(i64_unknown_wire::<()>(), |n| *n > 0, "positive");
+      let fallback = filter(i64_unknown_wire::<()>(), |n| *n < 0, "negative");
+      let union_schema = union_(primary, fallback);
+      let s = struct_("value", union_schema, "label", string::<()>());
+
+      let mut m = BTreeMap::new();
+      m.insert("value".into(), Unknown::I64(0));
+      m.insert("label".into(), Unknown::I64(1));
+      let u = Unknown::Object(m);
+
+      let err = s.decode_unknown_all(&u).expect_err("both should fail");
+      assert_eq!(err.issues.len(), 3);
+      assert_eq!(err.issues[0].path, "value.0");
+      assert_eq!(err.issues[0].message, "positive");
+      assert_eq!(err.issues[1].path, "value.1");
+      assert_eq!(err.issues[1].message, "negative");
+      assert_eq!(err.issues[2].path, "label");
+    }
+  }
+
+  mod array_all {
+    use super::*;
+
+    #[test]
+    fn decode_unknown_all_accumulates_all_invalid_element_errors() {
+      let s = array(struct_(
+        "x", i64::<()>(),
+        "y", string::<()>(),
+      ));
+
+      let mut obj0 = BTreeMap::new();
+      obj0.insert("x".into(), Unknown::I64(1));
+      obj0.insert("y".into(), Unknown::String("ok".into()));
+
+      let mut obj1 = BTreeMap::new();
+      obj1.insert("x".into(), Unknown::String("bad".into()));
+      obj1.insert("y".into(), Unknown::I64(2));
+
+      let mut obj2 = BTreeMap::new();
+      obj2.insert("x".into(), Unknown::I64(3));
+      obj2.insert("y".into(), Unknown::I64(4));
+
+      let u = Unknown::Array(vec![
+        Unknown::Object(obj0),
+        Unknown::Object(obj1),
+        Unknown::Object(obj2),
+      ]);
+
+      let err = s.decode_unknown_all(&u).expect_err("some should fail");
+      assert_eq!(err.issues.len(), 3);
+      assert_eq!(err.issues[0].path, "1.x");
+      assert_eq!(err.issues[1].path, "1.y");
+      assert_eq!(err.issues[2].path, "2.y");
+    }
+  }
+
+  mod optional_all {
+    use super::*;
+
+    #[test]
+    fn decode_unknown_all_null_returns_none() {
+      let s = optional(i64::<()>());
+      assert_eq!(s.decode_unknown_all(&Unknown::Null).unwrap(), None);
+    }
+
+    #[test]
+    fn decode_unknown_all_non_null_propagates_inner_errors() {
+      let s = optional(struct_(
+        "a", i64::<()>(),
+        "b", string::<()>(),
+      ));
+
+      let mut m = BTreeMap::new();
+      m.insert("a".into(), Unknown::String("bad".into()));
+      m.insert("b".into(), Unknown::I64(1));
+
+      let err = s
+        .decode_unknown_all(&Unknown::Object(m))
+        .expect_err("inner should fail");
+      assert_eq!(err.issues.len(), 2);
+      assert_eq!(err.issues[0].path, "a");
+      assert_eq!(err.issues[1].path, "b");
+    }
+  }
+
+  mod compatibility {
+    use super::*;
+
+    #[test]
+    fn decode_unknown_still_short_circuits_on_tuple3() {
+      let s = tuple3(i64::<()>(), string::<()>(), bool_::<()>());
+      let u = Unknown::Array(vec![
+        Unknown::String("bad".into()),
+        Unknown::I64(1),
+        Unknown::I64(2),
+      ]);
+      let err = s.decode_unknown(&u).expect_err("should fail");
+      assert_eq!(err.path, "0");
+    }
+
+    #[test]
+    fn decode_unknown_still_short_circuits_on_struct4() {
+      let s = struct4(
+        "a", i64::<()>(),
+        "b", string::<()>(),
+        "c", bool_::<()>(),
+        "d", f64::<()>(),
+      );
+      let mut m = BTreeMap::new();
+      m.insert("a".into(), Unknown::String("bad".into()));
+      m.insert("b".into(), Unknown::I64(1));
+      m.insert("c".into(), Unknown::I64(2));
+      m.insert("d".into(), Unknown::String("bad".into()));
+      let err = s.decode_unknown(&Unknown::Object(m)).expect_err("should fail");
+      assert_eq!(err.path, "a");
+    }
+
+    #[test]
+    fn existing_helpers_still_encode() {
+      let s = tuple3(i64::<()>(), string::<()>(), bool_::<()>());
+      assert_eq!(s.encode((1_i64, "x".to_string(), true)), (1_i64, "x".to_string(), true));
     }
   }
 }

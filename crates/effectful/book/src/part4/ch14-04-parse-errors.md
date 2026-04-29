@@ -38,7 +38,7 @@ assert_eq!(err.path, "1");
 
 ## Accumulation Status
 
-The current schema decoders generally short-circuit on the first failure. `ParseErrors` exists as the aggregate type for boundaries or custom validators that collect multiple `ParseError` values themselves.
+The current schema decoders generally short-circuit on the first failure for `decode_unknown`, but `decode_unknown_all` accumulates nested field errors for object and tuple schemas (including `struct_`/`struct3`/`struct4`, `tuple`/`tuple3`/`tuple4`), as well as array elements and union arm diagnostics. `ParseErrors` exists as the aggregate type for boundaries or custom validators that collect multiple `ParseError` values themselves.
 
 ```rust,ignore
 fn validate_user(raw: &Unknown) -> Result<User, ParseErrors> {
