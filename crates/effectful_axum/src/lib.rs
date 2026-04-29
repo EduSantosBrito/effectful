@@ -243,6 +243,7 @@ mod tests {
 
     #[derive(Clone)]
     struct St {
+      #[allow(dead_code)]
       q: Queue<HttpResponse<Bytes>>,
     }
 
