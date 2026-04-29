@@ -274,9 +274,12 @@ where
 mod tests {
   use super::*;
   use crate::scheduling::duration::duration;
-  use crate::{MissingService, Schedule, fail, retry, succeed};
+  use crate::{
+    Metric, MissingService, Schedule, ScheduleInput, fail, retry, retry_with_clock, succeed,
+  };
   use rstest::rstest;
   use std::sync::Arc;
+  use std::sync::Mutex;
   use std::sync::atomic::{AtomicUsize, Ordering};
 
   #[derive(Clone, Debug, PartialEq, effectful::Service)]
@@ -357,6 +360,77 @@ mod tests {
         "retry waited on wall clock for {elapsed:?}"
       );
       assert_eq!(clock.pending_sleeps(), vec![start + duration::millis(50)]);
+    }
+
+    #[test]
+    fn run_test_with_clock_retry_composed_schedule_uses_attempt_inputs_and_test_clock() {
+      let start = std::time::Instant::now();
+      let clock = TestClock::new(start);
+      let counter = Metric::counter("retry_composed_attempts", []);
+
+      let predicate_attempts = Arc::new(Mutex::new(Vec::new()));
+      let contramap_attempts = Arc::new(Mutex::new(Vec::new()));
+
+      let predicate_attempts_c = Arc::clone(&predicate_attempts);
+      let contramap_attempts_c = Arc::clone(&contramap_attempts);
+
+      let attempts = Arc::new(AtomicUsize::new(0));
+      let attempts_c = Arc::clone(&attempts);
+
+      let effect = retry_with_clock(
+        move || {
+          let n = attempts_c.fetch_add(1, Ordering::SeqCst);
+          if n < 2 {
+            fail::<usize, &'static str, ()>("boom")
+          } else {
+            succeed::<usize, &'static str, ()>(n + 1)
+          }
+        },
+        Schedule::spaced(duration::millis(50))
+          .compose(Schedule::recurs_while({
+            let attempts = Arc::clone(&predicate_attempts_c);
+            Box::new(move |i: &ScheduleInput| {
+              attempts.lock().expect("mutex poisoned").push(i.attempt);
+              i.attempt < 2
+            })
+          }))
+          .compose(
+            Schedule::recurs_until(Box::new(|i: &ScheduleInput| i.attempt >= 12)).contramap({
+              let attempts = Arc::clone(&contramap_attempts_c);
+              move |mut i: ScheduleInput| {
+                attempts.lock().expect("mutex poisoned").push(i.attempt);
+                i.attempt = i.attempt.saturating_add(10);
+                i
+              }
+            }),
+          ),
+        TestClock::new(start),
+        Some(counter.clone()),
+      );
+
+      let before = std::time::Instant::now();
+      let exit = run_test_with_clock(effect, (), clock.clone());
+      let elapsed = before.elapsed();
+
+      assert_eq!(exit, Exit::succeed(3));
+      assert_eq!(attempts.load(Ordering::SeqCst), 3);
+      assert_eq!(counter.snapshot_count(), 3);
+
+      let pred_seen = predicate_attempts.lock().expect("mutex poisoned");
+      assert_eq!(*pred_seen, vec![0, 1]);
+
+      let contra_seen = contramap_attempts.lock().expect("mutex poisoned");
+      assert_eq!(*contra_seen, vec![0, 1]);
+
+      assert_eq!(
+        clock.pending_sleeps(),
+        vec![start + duration::millis(50), start + duration::millis(50)]
+      );
+
+      assert!(
+        elapsed < duration::millis(25),
+        "retry waited on wall clock for {elapsed:?}"
+      );
     }
   }
 
