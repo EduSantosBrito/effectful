@@ -147,15 +147,16 @@ pub trait TraceContextProvider: Send + Sync + 'static {
   fn child_context(&self, parent: &SpanContext) -> SpanContext;
 }
 
+static GLOBAL_SEQ_SPAN_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 /// Deterministic monotonic id provider used by default and by tests.
 #[derive(Debug, Default)]
 pub struct SequentialTraceContextProvider {
   next_trace: AtomicU64,
-  next_span: AtomicU64,
 }
 
 impl SequentialTraceContextProvider {
-  /// Creates a provider whose first generated trace/span counter is `1`.
+  /// Creates a provider whose first generated trace counter is `1`.
   #[inline]
   pub fn new() -> Self {
     Self::default()
@@ -168,7 +169,7 @@ impl SequentialTraceContextProvider {
   }
 
   fn next_span_id(&self) -> SpanId {
-    SpanId::from_bytes((self.next_span.fetch_add(1, Ordering::Relaxed) + 1).to_be_bytes())
+    SpanId::from_bytes((GLOBAL_SEQ_SPAN_COUNTER.fetch_add(1, Ordering::Relaxed) + 1).to_be_bytes())
   }
 }
 
@@ -1816,6 +1817,76 @@ mod tests {
       assert_eq!(inner_span.parent_span_id, Some(outer_span.context.span_id));
       assert_eq!(outer_span.context.trace_id, parsed.trace_id);
       assert_eq!(inner_span.context.trace_id, parsed.trace_id);
+    }
+
+    #[test]
+    fn collected_nested_spans_with_parsed_traceparent_do_not_need_tracing_bridge() {
+      let _guard = test_lock();
+      let _ = run_blocking(install_tracing_layer(TracingConfig::default()), ());
+      let parsed =
+        SpanContext::from_traceparent("00-01010101010101010101010101010101-0202020202020202-01")
+          .expect("valid traceparent");
+      let collector = RecordingTraceCollector::default();
+      let inner = with_span_options_collected(
+        succeed::<(), (), ()>(()),
+        SpanOptions::new("inner.no_bridge"),
+        Arc::new(collector.clone()),
+      );
+      let outer = with_span_options_collected_with_parent(
+        inner,
+        SpanOptions::new("outer.no_bridge"),
+        Some(parsed),
+        Arc::new(collector.clone()),
+      );
+
+      let out = run_blocking(outer, ());
+      assert_eq!(out, Ok(()));
+
+      let snapshot = collector.snapshot();
+      assert_eq!(snapshot.spans.len(), 2);
+      let outer_span = snapshot
+        .spans
+        .iter()
+        .find(|s| s.name == "outer.no_bridge")
+        .expect("outer span");
+      let inner_span = snapshot
+        .spans
+        .iter()
+        .find(|s| s.name == "inner.no_bridge")
+        .expect("inner span");
+
+      assert!(outer_span.ended_at.is_some());
+      assert_eq!(outer_span.status, SpanStatus::Ok);
+      assert!(inner_span.ended_at.is_some());
+      assert_eq!(inner_span.status, SpanStatus::Ok);
+
+      assert_eq!(outer_span.parent_span_id, Some(parsed.span_id));
+      assert_eq!(outer_span.context.trace_id, parsed.trace_id);
+      assert_eq!(outer_span.context.trace_flags, parsed.trace_flags);
+
+      assert_eq!(inner_span.parent_span_id, Some(outer_span.context.span_id));
+      assert_eq!(inner_span.context.trace_id, parsed.trace_id);
+      assert_eq!(inner_span.context.trace_flags, parsed.trace_flags);
+
+      assert_eq!(
+        snapshot.effect_events,
+        vec![
+          EffectEvent::Start {
+            span: "outer.no_bridge".to_string(),
+          },
+          EffectEvent::Start {
+            span: "inner.no_bridge".to_string(),
+          },
+          EffectEvent::Success {
+            span: "inner.no_bridge".to_string(),
+          },
+          EffectEvent::Success {
+            span: "outer.no_bridge".to_string(),
+          },
+        ]
+      );
+      assert!(snapshot_tracing().spans.is_empty());
+      assert!(snapshot_tracing().effect_events.is_empty());
     }
   }
 

@@ -24,6 +24,7 @@
 .DS_Store
 .beads/
 .cargo/*
+.cargo_home/
 .devenv*
 .direnv
 .drift/**/.backups/
