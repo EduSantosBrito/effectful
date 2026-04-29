@@ -14,7 +14,7 @@ use axum::body::{Body, Bytes};
 use axum::http::{Request, Response, StatusCode};
 use axum::response::{IntoResponse, Response as AxumResponse};
 use effectful::channel::QueueChannel;
-use effectful::{Effect, QueueError, box_future, effect};
+use effectful::{Effect, QueueError};
 use http_body_util::BodyExt;
 
 #[inline]
@@ -35,23 +35,9 @@ where
   E: From<StatusCode> + 'static,
   R: 'static,
 {
-  effect!(|r: &mut R| {
-    let ch = ch.clone();
-    bind
-      * Effect::new_async(move |env: &mut R| {
-        box_future(async move {
-          ch.write(req)
-            .run(env)
-            .await
-            .map_err(|qe| map_queue_error(qe).into())?;
-          match ch.read().run(env).await {
-            Ok(Some(resp)) => Ok(resp.into()),
-            Ok(None) => Err(StatusCode::SERVICE_UNAVAILABLE.into()),
-            Err(qe) => Err(map_queue_error(qe).into()),
-          }
-        })
-      })
-  })
+  effectful_tower::queue_channel_exchange(ch, req)
+    .map(|r: Response<Bytes>| r.into())
+    .map_error(|e| map_queue_error(e).into())
 }
 
 /// Buffer `req`'s body to [`Bytes`], run [`exchange`], then map the wire response to Axum's
@@ -68,9 +54,11 @@ pub async fn exchange_into_response<R: Send + 'static>(
     Err(_) => return StatusCode::BAD_REQUEST.into_response(),
   };
   let req_b = Request::from_parts(parts, bytes);
-  match effectful_tokio::run_effect_from_state(env, move |_e| {
-    exchange::<Response<Bytes>, StatusCode, R>(ch, req_b)
-  })
+  match effectful_tokio::run_effect_from_state_with(
+    env,
+    effectful_tokio::EffectExecution::Plain,
+    move |_e| exchange::<Response<Bytes>, StatusCode, R>(ch, req_b),
+  )
   .await
   {
     Ok(r) => {

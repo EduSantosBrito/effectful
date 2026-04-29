@@ -22,10 +22,35 @@ use std::time::{Duration, Instant};
 
 use pin_project_lite::pin_project;
 
-use effectful::{Effect, FiberHandle, FiberId, Never, Runtime, from_async};
+use effectful::{Effect, FiberHandle, FiberId, Metric, Never, Runtime, from_async};
+use effectful::Duration as EffectfulDuration;
 
 /// Commonly used at the async boundary together with [`TokioRuntime`].
 pub use effectful::{run_async, run_blocking, run_fork, yield_now};
+
+/// Execution mode for [`run_effect_from_state_with`].
+///
+/// Using an enum makes illegal metric states unrepresentable: a plain run has no metrics,
+/// route metrics have request counter + latency, and service metrics have latency + errors.
+#[derive(Clone)]
+pub enum EffectExecution {
+  /// No metrics; equivalent to [`run_effect_from_state`].
+  Plain,
+  /// Axum route metrics: increment a request counter and record handler latency.
+  RouteMetrics {
+    /// Request counter incremented once per call.
+    request_counter: Metric<u64, ()>,
+    /// Latency histogram / timer / summary.
+    latency: Metric<EffectfulDuration, ()>,
+  },
+  /// Tower service metrics: record request latency and increment an error counter on failure.
+  ServiceMetrics {
+    /// Latency histogram / timer / summary.
+    latency: Metric<EffectfulDuration, ()>,
+    /// Error counter incremented when the effect returns `Err`.
+    errors: Metric<u64, ()>,
+  },
+}
 
 /// Run `build(&mut env)` to obtain an effect, then drive it to completion with the **same** `env`.
 ///
@@ -33,7 +58,11 @@ pub use effectful::{run_async, run_blocking, run_fork, yield_now};
 /// so the returned future is [`Send`] for Axum / Tower HTTP handlers. Requires a **multi-thread**
 /// Tokio runtime (the default for `#[tokio::main]`).
 #[inline]
-pub async fn run_effect_from_state<S, A, E, F>(mut env: S, build: F) -> Result<A, E>
+pub async fn run_effect_from_state_with<S, A, E, F>(
+  mut env: S,
+  execution: EffectExecution,
+  build: F,
+) -> Result<A, E>
 where
   S: Send + 'static,
   A: 'static,
@@ -42,10 +71,44 @@ where
 {
   tokio::task::block_in_place(move || {
     tokio::runtime::Handle::current().block_on(async move {
-      let eff = build(&mut env);
-      run_async(eff, env).await
+      match execution {
+        EffectExecution::Plain => {
+          let eff = build(&mut env);
+          run_async(eff, env).await
+        }
+        EffectExecution::RouteMetrics {
+          request_counter,
+          latency,
+        } => {
+          let _ = run_async(request_counter.apply(1), ()).await;
+          let eff = build(&mut env);
+          let eff = latency.track_duration(eff);
+          run_async(eff, env).await
+        }
+        EffectExecution::ServiceMetrics { latency, errors } => {
+          let eff = build(&mut env);
+          let eff = latency.track_duration(eff);
+          let result = run_async(eff, env).await;
+          if result.is_err() {
+            let _ = run_async(errors.apply(1), ()).await;
+          }
+          result
+        }
+      }
     })
   })
+}
+
+/// Convenience wrapper: [`run_effect_from_state_with`] with [`EffectExecution::Plain`].
+#[inline]
+pub async fn run_effect_from_state<S, A, E, F>(env: S, build: F) -> Result<A, E>
+where
+  S: Send + 'static,
+  A: 'static,
+  E: 'static,
+  F: FnOnce(&mut S) -> Effect<A, E, S>,
+{
+  run_effect_from_state_with(env, EffectExecution::Plain, build).await
 }
 
 /// Tokio-backed [`Runtime`] adapter (async `sleep` / `yield_now`).
@@ -220,7 +283,7 @@ fn instant_now_blocking() -> Instant {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use effectful::kernel::succeed;
+  use effectful::kernel::{fail, succeed};
   use std::time::Duration;
 
   #[test]
@@ -305,5 +368,68 @@ mod tests {
     let owned = TokioRuntime::new_current_thread().expect("runtime");
     let adapter = TokioRuntime::from_handle(owned.handle());
     adapter.block_on(async {});
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn run_effect_from_state_with_plain_runs_effect() {
+    let result = run_effect_from_state_with((), EffectExecution::Plain, |_e| {
+      succeed::<u32, (), ()>(42)
+    })
+    .await;
+    assert_eq!(result, Ok(42));
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn run_effect_from_state_with_route_metrics_increments_counter_and_records_latency() {
+    let ctr = Metric::counter("req", std::iter::empty());
+    let lat = Metric::<EffectfulDuration, ()>::histogram("lat", std::iter::empty());
+    let result = run_effect_from_state_with(
+      (),
+      EffectExecution::RouteMetrics {
+        request_counter: ctr.clone(),
+        latency: lat.clone(),
+      },
+      |_e| succeed::<u32, (), ()>(99),
+    )
+    .await;
+    assert_eq!(result, Ok(99));
+    assert_eq!(ctr.snapshot_count(), 1);
+    assert_eq!(lat.snapshot_durations().len(), 1);
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn run_effect_from_state_with_service_metrics_records_latency_and_increments_errors() {
+    let lat = Metric::<EffectfulDuration, ()>::histogram("lat", std::iter::empty());
+    let err = Metric::counter("err", std::iter::empty());
+    let result = run_effect_from_state_with(
+      (),
+      EffectExecution::ServiceMetrics {
+        latency: lat.clone(),
+        errors: err.clone(),
+      },
+      |_e| fail::<u32, &str, ()>("boom"),
+    )
+    .await;
+    assert_eq!(result, Err("boom"));
+    assert_eq!(err.snapshot_count(), 1);
+    assert_eq!(lat.snapshot_durations().len(), 1);
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn run_effect_from_state_with_service_metrics_does_not_increment_errors_on_success() {
+    let lat = Metric::<EffectfulDuration, ()>::histogram("lat2", std::iter::empty());
+    let err = Metric::counter("err2", std::iter::empty());
+    let result = run_effect_from_state_with(
+      (),
+      EffectExecution::ServiceMetrics {
+        latency: lat.clone(),
+        errors: err.clone(),
+      },
+      |_e| succeed::<u32, &str, ()>(7),
+    )
+    .await;
+    assert_eq!(result, Ok(7));
+    assert_eq!(err.snapshot_count(), 0);
+    assert_eq!(lat.snapshot_durations().len(), 1);
   }
 }

@@ -13,24 +13,25 @@ use axum::routing::{MethodFilter, MethodRouter};
 use effectful::Effect;
 use effectful::Metric;
 use effectful::duration::Duration;
-use effectful::runtime::run_blocking;
+use effectful_tokio::EffectExecution;
 
-async fn run_with_axum_metrics<S, A, E, F>(
+/// Shared response helper: run the effect through [`EffectExecution`] and map `Result` to Axum
+/// [`IntoResponse`].
+async fn run_and_respond<S, A, E, F>(
   env: S,
-  request_counter: Metric<u64, ()>,
-  latency: Metric<Duration, ()>,
+  execution: EffectExecution,
   f: F,
-) -> Result<A, E>
+) -> axum::response::Response
 where
   S: Send + 'static,
-  A: 'static,
-  E: 'static,
+  A: IntoResponse + 'static,
+  E: IntoResponse + 'static,
   F: FnOnce(&mut S) -> Effect<A, E, S>,
 {
-  tokio::task::block_in_place(|| {
-    run_blocking(request_counter.apply(1), ()).expect("request counter");
-  });
-  effectful_tokio::run_effect_from_state(env, |e| latency.track_duration(f(e))).await
+  match effectful_tokio::run_effect_from_state_with(env, execution, f).await {
+    Ok(a) => a.into_response(),
+    Err(e) => e.into_response(),
+  }
 }
 
 /// `GET` — `f` is invoked per request; use [`Clone`] on `f` when the router stores it (e.g. closure
@@ -45,13 +46,7 @@ where
 {
   axum::routing::get(move |st: State<S>| {
     let f = f.clone();
-    async move {
-      let State(env) = st;
-      match effectful_tokio::run_effect_from_state(env, |e| f(e)).await {
-        Ok(a) => a.into_response(),
-        Err(e) => e.into_response(),
-      }
-    }
+    async move { crate::execute(st, move |e| f(e)).await }
   })
 }
 
@@ -73,14 +68,13 @@ where
 {
   axum::routing::get(move |st: State<S>| {
     let f = f.clone();
-    let ctr = request_counter.clone();
-    let lat = latency.clone();
+    let execution = EffectExecution::RouteMetrics {
+      request_counter: request_counter.clone(),
+      latency: latency.clone(),
+    };
     async move {
       let State(env) = st;
-      match run_with_axum_metrics(env, ctr, lat, |e| f(e)).await {
-        Ok(a) => a.into_response(),
-        Err(e) => e.into_response(),
-      }
+      run_and_respond(env, execution, |e| f(e)).await
     }
   })
 }
@@ -115,14 +109,13 @@ where
 {
   axum::routing::post(move |st: State<S>| {
     let f = f.clone();
-    let ctr = request_counter.clone();
-    let lat = latency.clone();
+    let execution = EffectExecution::RouteMetrics {
+      request_counter: request_counter.clone(),
+      latency: latency.clone(),
+    };
     async move {
       let State(env) = st;
-      match run_with_axum_metrics(env, ctr, lat, |e| f(e)).await {
-        Ok(a) => a.into_response(),
-        Err(e) => e.into_response(),
-      }
+      run_and_respond(env, execution, |e| f(e)).await
     }
   })
 }
@@ -157,14 +150,13 @@ where
 {
   axum::routing::put(move |st: State<S>| {
     let f = f.clone();
-    let ctr = request_counter.clone();
-    let lat = latency.clone();
+    let execution = EffectExecution::RouteMetrics {
+      request_counter: request_counter.clone(),
+      latency: latency.clone(),
+    };
     async move {
       let State(env) = st;
-      match run_with_axum_metrics(env, ctr, lat, |e| f(e)).await {
-        Ok(a) => a.into_response(),
-        Err(e) => e.into_response(),
-      }
+      run_and_respond(env, execution, |e| f(e)).await
     }
   })
 }
@@ -180,13 +172,7 @@ where
 {
   axum::routing::patch(move |st: State<S>| {
     let f = f.clone();
-    async move {
-      let State(env) = st;
-      match effectful_tokio::run_effect_from_state(env, |e| f(e)).await {
-        Ok(a) => a.into_response(),
-        Err(e) => e.into_response(),
-      }
-    }
+    async move { crate::execute(st, move |e| f(e)).await }
   })
 }
 
@@ -205,14 +191,13 @@ where
 {
   axum::routing::patch(move |st: State<S>| {
     let f = f.clone();
-    let ctr = request_counter.clone();
-    let lat = latency.clone();
+    let execution = EffectExecution::RouteMetrics {
+      request_counter: request_counter.clone(),
+      latency: latency.clone(),
+    };
     async move {
       let State(env) = st;
-      match run_with_axum_metrics(env, ctr, lat, |e| f(e)).await {
-        Ok(a) => a.into_response(),
-        Err(e) => e.into_response(),
-      }
+      run_and_respond(env, execution, |e| f(e)).await
     }
   })
 }
@@ -228,13 +213,7 @@ where
 {
   axum::routing::delete(move |st: State<S>| {
     let f = f.clone();
-    async move {
-      let State(env) = st;
-      match effectful_tokio::run_effect_from_state(env, |e| f(e)).await {
-        Ok(a) => a.into_response(),
-        Err(e) => e.into_response(),
-      }
-    }
+    async move { crate::execute(st, move |e| f(e)).await }
   })
 }
 
@@ -253,14 +232,13 @@ where
 {
   axum::routing::delete(move |st: State<S>| {
     let f = f.clone();
-    let ctr = request_counter.clone();
-    let lat = latency.clone();
+    let execution = EffectExecution::RouteMetrics {
+      request_counter: request_counter.clone(),
+      latency: latency.clone(),
+    };
     async move {
       let State(env) = st;
-      match run_with_axum_metrics(env, ctr, lat, |e| f(e)).await {
-        Ok(a) => a.into_response(),
-        Err(e) => e.into_response(),
-      }
+      run_and_respond(env, execution, |e| f(e)).await
     }
   })
 }
@@ -276,13 +254,7 @@ where
 {
   axum::routing::on(method, move |st: State<S>| {
     let f = f.clone();
-    async move {
-      let State(env) = st;
-      match effectful_tokio::run_effect_from_state(env, |e| f(e)).await {
-        Ok(a) => a.into_response(),
-        Err(e) => e.into_response(),
-      }
-    }
+    async move { crate::execute(st, move |e| f(e)).await }
   })
 }
 
@@ -302,14 +274,13 @@ where
 {
   axum::routing::on(method, move |st: State<S>| {
     let f = f.clone();
-    let ctr = request_counter.clone();
-    let lat = latency.clone();
+    let execution = EffectExecution::RouteMetrics {
+      request_counter: request_counter.clone(),
+      latency: latency.clone(),
+    };
     async move {
       let State(env) = st;
-      match run_with_axum_metrics(env, ctr, lat, |e| f(e)).await {
-        Ok(a) => a.into_response(),
-        Err(e) => e.into_response(),
-      }
+      run_and_respond(env, execution, |e| f(e)).await
     }
   })
 }
@@ -337,6 +308,48 @@ mod tests {
 
   fn fail_handler(_: &mut AppState) -> Effect<(), (StatusCode, &'static str), AppState> {
     fail((StatusCode::INTERNAL_SERVER_ERROR, "nope"))
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn get_success_maps_effect_value_into_response() {
+    let app = Router::new().route("/g", get(ok)).with_state(AppState(()));
+
+    let res = app
+      .oneshot(
+        Request::builder()
+          .method(Method::GET)
+          .uri("/g")
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"ok");
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn get_error_maps_effect_error_into_response() {
+    let app = Router::new()
+      .route("/g", get(fail_handler))
+      .with_state(AppState(()));
+
+    let res = app
+      .oneshot(
+        Request::builder()
+          .method(Method::GET)
+          .uri("/g")
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"nope");
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

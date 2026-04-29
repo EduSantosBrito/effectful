@@ -230,4 +230,42 @@ mod tests {
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
   }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn exchange_into_response_maps_closed_queue_to_503() {
+    use axum::body::Bytes;
+    use axum::extract::State;
+    use axum::http::Response as HttpResponse;
+    use effectful::channel::QueueChannel;
+    use effectful::Queue;
+
+    let q = effectful::runtime::run_blocking(Queue::unbounded(), ()).expect("queue");
+
+    #[derive(Clone)]
+    struct St {
+      q: Queue<HttpResponse<Bytes>>,
+    }
+
+    let ch = QueueChannel::<HttpResponse<Bytes>, Request<Bytes>, ()>::from_queue_and_map(
+      q.clone(),
+      |req| HttpResponse::new(req.into_body()),
+    );
+    effectful::runtime::run_blocking(ch.shutdown(), ()).expect("shutdown");
+
+    let app = Router::new()
+      .route(
+        "/",
+        axum::routing::get(|State(_s): State<St>, req: Request<Body>| async move {
+          exchange_into_response((), ch, req).await
+        }),
+      )
+      .with_state(St { q });
+
+    let req = Request::builder()
+      .uri("/")
+      .body(Body::from("ping"))
+      .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+  }
 }

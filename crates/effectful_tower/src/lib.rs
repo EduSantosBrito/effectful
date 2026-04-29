@@ -41,7 +41,7 @@ use std::task::{Context, Poll};
 
 use effectful::duration::Duration;
 use effectful::{Effect, Metric, QueueError, SynchronizedRef, box_future};
-use effectful_tokio::run_async as run_effect_async;
+use effectful_tokio::{EffectExecution, run_async as run_effect_async};
 use tokio::sync::{AcquireError, OwnedSemaphorePermit, Semaphore};
 use tower::Service;
 
@@ -249,18 +249,20 @@ where
     let metrics = self.request_metrics.clone();
     match &self.limit {
       None => Box::pin(async move {
-        let eff = f(&mut env, req);
-        let eff = match &metrics {
-          Some(m) => m.latency.track_duration(eff),
-          None => eff,
-        };
-        let result = run_effect_async(eff, env).await;
-        if result.is_err()
-          && let Some(m) = metrics
-        {
-          let _ = run_effect_async(m.errors.apply(1), ()).await;
+        match &metrics {
+          Some(m) => {
+            effectful_tokio::run_effect_from_state_with(
+              env,
+              EffectExecution::ServiceMetrics {
+                latency: m.latency.clone(),
+                errors: m.errors.clone(),
+              },
+              |e| f(e, req),
+            )
+            .await
+          }
+          None => run_effect_async(f(&mut env, req), env).await,
         }
-        result
       }),
       Some(lim) => {
         let permit = self
@@ -272,17 +274,20 @@ where
           run_effect_async(in_flight.update(|n| n.saturating_add(1)), ())
             .await
             .expect("in_flight increment");
-          let eff = f(&mut env, req);
-          let eff = match &metrics {
-            Some(m) => m.latency.track_duration(eff),
-            None => eff,
+          let result = match &metrics {
+            Some(m) => {
+              effectful_tokio::run_effect_from_state_with(
+                env.clone(),
+                EffectExecution::ServiceMetrics {
+                  latency: m.latency.clone(),
+                  errors: m.errors.clone(),
+                },
+                |e| f(e, req),
+              )
+              .await
+            }
+            None => run_effect_async(f(&mut env, req), env.clone()).await,
           };
-          let result = run_effect_async(eff, env.clone()).await;
-          if result.is_err()
-            && let Some(m) = metrics
-          {
-            let _ = run_effect_async(m.errors.apply(1), ()).await;
-          }
           run_effect_async(in_flight.update(|n| n.saturating_sub(1)), ())
             .await
             .expect("in_flight decrement");
@@ -353,7 +358,9 @@ where
   }
 }
 
-fn channel_exchange<S, Req, Res>(
+/// Build an effect that performs one round-trip on `ch`: enqueue `req`, then await the response.
+/// Read errors are [`QueueError`].
+pub fn queue_channel_exchange<S, Req, Res>(
   ch: effectful::channel::QueueChannel<Res, Req, S>,
   req: Req,
 ) -> Effect<Res, QueueError, S>
@@ -392,7 +399,12 @@ where
     let env = self.state.clone();
     let ch = self.channel.clone();
     Box::pin(async move {
-      effectful_tokio::run_effect_from_state(env, |_r| channel_exchange(ch, req)).await
+      effectful_tokio::run_effect_from_state_with(
+        env,
+        EffectExecution::Plain,
+        |_r| queue_channel_exchange(ch, req),
+      )
+      .await
     })
   }
 }
@@ -423,7 +435,7 @@ mod tests {
     assert_eq!(svc.ready().await.unwrap().call(10).await, Ok(11));
   }
 
-  #[tokio::test(flavor = "current_thread")]
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
   async fn tower_latency_histogram_records_duration() {
     let timer = Metric::timer("tower_req", std::iter::empty());
     let errors = Metric::counter("tower_err", std::iter::empty());
@@ -508,7 +520,7 @@ mod tests {
       .unwrap();
   }
 
-  #[tokio::test(flavor = "current_thread")]
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
   async fn tower_error_metric_increments_on_failure() {
     let timer = Metric::timer("tower_req_fail", std::iter::empty());
     let errors = Metric::counter("tower_err_fail", std::iter::empty());
